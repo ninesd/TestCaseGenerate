@@ -1,0 +1,40 @@
+下载虚拟机文件：
+https://zenodo.org/record/4771439#.Ydz0O8g5vGQ
+需要Oracle VM VirtualBox
+https://www.virtualbox.org/wiki/Downloads
+
+
+把该文件夹复制到~/TracerX/llvm/tools/clang/tools/  目录下
+然后：
+
+0. vim ~/.bashrc 在末尾插入
+export PATH=$PATH:/home/issta21-322/TracerX/llvm/Release/bin
+export PATH=$PATH:/home/issta21-322/TracerX/tracerx/Release+Asserts/bin
+export C_INCLUDE_PATH=/home/issta21-322/TracerX/tracerx/include:$C_INCLUDE_PATH
+export CPLUS_INCLUDE_PATH=/home/issta21-322/TracerX/tracerx/include:$CPLUS_INCLUDE_PATH
+
+1. source ~/.bashrc
+2. cd ~/TracerX/llvm/tools/clang/tools/TestCaseGenerate
+3. make
+4. ~/TracerX/llvm/Release/bin/TestCaseGenerate test.c -condition -decision -CDC -MCC -MCDC -func=func1 -genD -no-interpolation --
+或 ./run_example.sh
+
+可以在任意目录运行该工具，生成结果会放在源文件目录下新建的“./result-文件名”文件夹内
+
+参数解释：
+test.c 表示要测试的文件，一次只能有一个
+-condition -decision -CDC -MCC -MCDC -statement -path表示选择要生成的覆盖率，可以自由选择组合
+-func=main 表示要测试的函数名
+-addI 表示自动添加klee相关inlude，默认开启
+-addD 表示自动生成驱动函数（如果要测试的函数不是main函数，则生成main函数作为驱动函数，如果已经有main函数，则覆盖原有main函数；如果要测试的函数是main函数，则在main函数的开头插入必要的符号化代码），默认开启
+-genA -genD -genS 表示生成模式（A表示在一个文件上生成所有信息；D表示每个Decision单独生成一个文件；S表示每个测试用例单独生成一个文件）。
+这个主要是我自己做实验用，实际使用的话直接用-genA就可以了，另外两个不用加
+-runKlee 表示在生成文件后自动运行klee，默认开启
+-debug 表示打印调试信息
+-no-interpolation 关闭剪枝算法，使用原版klee
+-emit-all-errors klee运行时添加emit-all-errors参数，若开启则KLEE会为同一个错误生成多个测试用例，否则每个错误只会生成一次，之后会忽略
+-boundary 为所有符号量设置上下限
+
+
+最后的 -- 没什么意义，是clang tool要求加的
+
