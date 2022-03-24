@@ -218,12 +218,15 @@ private:
 
     // 是否可以被剪枝
     bool ifNotCovered(set<long long> &oldState, long long currentState) {
-        for (auto oldPath=oldState.begin(); oldPath!=oldState.end(); oldPath++) {
-            if ((*oldPath | currentState) == *oldPath) {
+        for (auto itState = oldState.begin(); itState != oldState.end(); ) {
+            if ((*itState | currentState) == *itState) {
                 return false;
             }
-            else if ((*oldPath | currentState) == currentState) {
-                oldState.erase(oldPath);
+            else if ((*itState | currentState) == currentState) {
+                itState = oldState.erase(itState);
+            }
+            else {
+                itState++;
             }
         }
         oldState.insert(currentState);
@@ -231,6 +234,7 @@ private:
     }
 
     // 广搜求最小组合 for condition / CDC
+    // 从seqs中取出若干seq, 或运算, 求使结果到达target的数量最小的seq组合
     set<unsigned int> bfsCondition(vector<long long> &seqs, long long target) {
         // visited表示过去途经的状态
         unordered_set<long long> visited;
@@ -238,29 +242,31 @@ private:
         set<long long> oldState;
         // queue表示广搜队列
         vector<pair<long long, unsigned int> > queue;
+        // prior维护queue中每一项的前一项下标, 用于最后输出
         vector<unsigned int> prior;
         set<unsigned int> result;
         queue.reserve(1000000);
         prior.reserve(1000000);
 
         unsigned int head = 0;
-        int end = -1;
         queue.push_back(make_pair(0, 0));
         visited.insert(0);
         oldState.insert(0);
 
-        llvm::errs() << "BFS START!\n";
-        for (unsigned int i=0; i<seqs.size(); i++)
-            llvm::errs() << seqs.at(i) << "\n";
-
         while (head!=queue.size()) {
             for (unsigned int i=0; i<seqs.size(); i++) {
                 long long newState = seqs.at(i) | queue.at(head).first;
-                if (newState==target) {
-                    end = head;
+                // 到达target
+                if (newState == target) {
                     result.insert(i);
-                    break;
+                    int cur = head;
+                    while (cur != 0) {
+                        result.insert(queue.at(cur).second);
+                        cur = prior.at(cur);
+                    }
+                    return result;
                 }
+
                 if (visited.count(newState)==0) {
                     visited.insert(newState);
                     if (ifNotCovered(oldState, newState)) {
@@ -269,18 +275,9 @@ private:
                     }
                 }
             }
-            if (end!=-1) break;
             head++;
         }
 
-        llvm::errs() << "BFS END!\n";
-
-        if (end == -1) return result;
-        int cur = end;
-        while (cur != 0) {
-            result.insert(queue.at(cur).second);
-            cur = prior.at(cur);
-        }
         return result;
     }
 
@@ -1226,7 +1223,6 @@ private:
 
         // 删除extern关键词
         for (VarDecl* externVarDel : externVariables) {
-            llvm::errs() << rewriter->getRewrittenText(externVarDel->getUnderlyingDecl()->getSourceRange()) << "\n";
             string varDeclStr = rewriter->getRewrittenText(externVarDel->getSourceRange());
             string::size_type pos = varDeclStr.find("extern ");
             if (pos != string::npos) {
@@ -1380,7 +1376,12 @@ private:
         string varDeclText = varType + " " + varName;
         string paramDeclText = sourceCode.getRewrittenText(varDecl->getSourceRange());
         eraseChar(paramDeclText, '&');
-        if (DEBUG) llvm::errs() << "Found var : [" << varType << "] " << varName << "!\n";
+        if (DEBUG) {
+            if (varDecl->hasExternalStorage())
+                llvm::errs() << "Found extern var : [" << varType << "] " << varName << "!\n";
+            else
+                llvm::errs() << "Found var : [" << varType << "] " << varName << "!\n";
+        }
 
         char buffer[255];
 
@@ -1415,7 +1416,7 @@ private:
             if (NULL != type->getPointeeCXXRecordDecl()) {
                 llvm::errs() << "WARNING : [" << varType << "] " << varName << " is a PointerType pointing to c++ struct/union/class!\n";
             }
-                // 先定义指针指向的变量，再将指针变量赋值
+            // 先定义指针指向的变量，再将指针变量赋值
             else {
                 if (!pointeeType.getTypePtr()->getUnqualifiedDesugaredType()->isFundamentalType()) {
                     llvm::errs() << "WARNING : [" << varType << "] " << varName << " is not a support type variable!\n";
@@ -1473,6 +1474,9 @@ private:
         }
         else if (NULL != type->getAsCXXRecordDecl()) {
             llvm::errs() << "WARNING : [" << varType << "] " << varName << " is a c++ struct/union/class!\n";
+        }
+        else if (type->isStructureType()) {
+            llvm::errs() << "WARNING : [" << varType << "] " << varName << " is a structural type and will be regarded as ONE number!\n";
         }
         else if (!type->isFundamentalType()) {
             llvm::errs() << "WARNING : [" << varType << "] " << varName << " is not a support type variable!\n";
