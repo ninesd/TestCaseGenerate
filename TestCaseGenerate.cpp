@@ -1941,7 +1941,11 @@ int main(int argc, const char **argv) {
     rawPath /= resultDirStr;
 
     string kleeIncludeDir = KleeIncludePath==""?"":"-I "+KleeIncludePath+" ";
+#if CLANG_VERSION == 3
+    string IgnorePrintfStr = "";
+#else
     string IgnorePrintfStr = IgnorePrintf?"-ignore-printf ":"";
+#endif
 
     // 编译生成的代码，然后使用klee符号执行
     if (runKlee) {
