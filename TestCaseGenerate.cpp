@@ -105,13 +105,14 @@ cl::opt<bool> runKlee("runKlee", cl::desc("run klee after source2source transfor
 cl::opt<bool> DEBUG("DEBUG", cl::desc("output debug message"), cl::init(false));
 cl::opt<bool> EmitAllErrors("emit-all-errors", cl::desc("generate tests cases for all errors"), cl::init(false));
 cl::opt<int> boundary("boundary", cl::desc("Upper Bound and Lower Bound of INT value"), cl::init(-1));
-cl::opt<bool> IgnorePrintf("ignore-printf", cl::desc("Ignore Printf (default=false)"), cl::init(false));
 cl::opt<string> KleePath("klee-path", cl::desc("Path of klee"), cl::init("klee"));
 cl::opt<string> KleeIncludePath("klee-include-path", cl::desc("Path of klee include dir"), cl::init(""));
 cl::opt<string> ClangPath("clang-path", cl::desc("Path of clang"), cl::init("clang"));
 
 #if CLANG_VERSION == 3
 cl::opt<bool> NoInterpolation("no-interpolation", cl::desc("no interpolation"), cl::init(false));
+#else
+cl::opt<bool> IgnorePrintf("ignore-printf", cl::desc("Ignore Printf (default=false)"), cl::init(false));
 #endif
 
 enum class SearchPolicy {
