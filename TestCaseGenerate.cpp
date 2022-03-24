@@ -83,6 +83,8 @@ set<VarDecl*> externVariables;
 // 0b0001
 #define OR 1
 
+static cl::OptionCategory TCGCategory("TCG options");
+
 cl::opt<bool> conditionCoverageOutput("condition", cl::desc("create condition coverage output file"), cl::init(false));
 cl::opt<bool> decisionCoverageOutput("decision", cl::desc("create decision coverage output file"), cl::init(false));
 cl::opt<bool> CDCOutput("CDC", cl::desc("create CDC output file"), cl::init(false));
@@ -98,10 +100,28 @@ cl::opt<bool> genA("genA", cl::desc("generate all sequences in one file"), cl::i
 cl::opt<bool> genD("genD", cl::desc("generate each decision one file"), cl::init(false));
 cl::opt<bool> genS("genS", cl::desc("generate each sequence one file"), cl::init(false));
 cl::opt<bool> runKlee("runKlee", cl::desc("run klee after source2source transform"), cl::init(true));
-cl::opt<bool> DEBUG("debug", cl::desc("output debug message"), cl::init(false));
+cl::opt<bool> DEBUG("DEBUG", cl::desc("output debug message"), cl::init(false));
 cl::opt<bool> EmitAllErrors("emit-all-errors", cl::desc("generate tests cases for all errors"), cl::init(false));
-cl::opt<bool> NoInterpolation("no-interpolation", cl::desc("no interpolation"), cl::init(false));
 cl::opt<int> boundary("boundary", cl::desc("Upper Bound and Lower Bound of INT value"), cl::init(-1));
+cl::opt<bool> IgnorePrintf("ignore-printf", cl::desc("Ignore Printf (default=false)"), cl::init(false));
+cl::opt<string> KleePath("klee-path", cl::desc("Path of klee"), cl::init("klee"));
+cl::opt<string> KleeIncludePath("klee-include-path", cl::desc("Path of klee include dir"), cl::init(""));
+cl::opt<string> ClangPath("clang-path", cl::desc("Path of clang"), cl::init("clang"));
+
+enum class SearchPolicy {
+    Auto,
+    Search,
+    Greedy,
+};
+
+cl::opt<SearchPolicy> SearchMode(
+        "search-mode",
+        cl::desc("Specify the search policy"),
+        cl::values(
+                clEnumValN(SearchPolicy::Auto, "auto", "Switch between Search and Greedy depend on the input size"),
+                clEnumValN(SearchPolicy::Search, "search", "Always Search"),
+                clEnumValN(SearchPolicy::Greedy, "greedy", "Always Greedy")),
+        cl::init(SearchPolicy::Auto));
 
 // 将src中的全部内容添加到dest中
 void addAll(vector<pair<long long, long long> > &dest, vector<pair<long long, long long> > &src) {
@@ -216,6 +236,11 @@ private:
         queue.push_back(make_pair(0, 0));
         visited.insert(0);
         oldState.insert(0);
+
+        llvm::errs() << "BFS START!\n";
+        for (unsigned int i=0; i<seqs.size(); i++)
+            llvm::errs() << seqs.at(i) << "\n";
+
         while (head!=queue.size()) {
             for (unsigned int i=0; i<seqs.size(); i++) {
                 long long newState = seqs.at(i) | queue.at(head).first;
@@ -235,6 +260,8 @@ private:
             if (end!=-1) break;
             head++;
         }
+
+        llvm::errs() << "BFS END!\n";
 
         if (end == -1) return result;
         int cur = end;
@@ -485,10 +512,18 @@ private:
         set<unsigned int> result;
         long long target = 0;
         for (long long seq : seqs) target |= seq;
-        if (seqs.size() <= 200)
+        if (SearchMode == SearchPolicy::Search)
             result = bfsCondition(seqs, target);
-        else
+        else if (SearchMode == SearchPolicy::Greedy)
             result = greedyCondition(seqs, target);
+        else {
+            if (seqs.size() <= 200)
+                result = bfsCondition(seqs, target);
+            else
+                result = greedyCondition(seqs, target);
+        }
+
+        llvm::errs() << "SEARCH FINISHED!\n";
 
         vector<pair<long long, long long> > conditionResult;
         if (!result.empty()) {
@@ -544,10 +579,16 @@ private:
         set<unsigned int> result;
         long long target = 0;
         for (long long seq : seqs) target |= seq;
-        if (seqs.size() <= 200)
+        if (SearchMode == SearchPolicy::Search)
             result = bfsCondition(seqs, target);
-        else
+        else if (SearchMode == SearchPolicy::Greedy)
             result = greedyCondition(seqs, target);
+        else {
+            if (seqs.size() <= 200)
+                result = bfsCondition(seqs, target);
+            else
+                result = greedyCondition(seqs, target);
+        }
 
         vector<pair<long long, long long> > CDCResult;
         if (!result.empty()) {
@@ -617,10 +658,16 @@ private:
         }
 
         set<unsigned int> result;
-        if (allCases.size() > 80)
-            result = greedyMCDC(MCDCPairs);
-        else
+        if (SearchMode == SearchPolicy::Search)
             result = dfsMCDC(MCDCPairs);
+        else if (SearchMode == SearchPolicy::Search)
+            result = greedyMCDC(MCDCPairs);
+        else {
+            if (allCases.size() > 80)
+                result = greedyMCDC(MCDCPairs);
+            else
+                result = dfsMCDC(MCDCPairs);
+        }
 
         vector<pair<long long, long long> > MCDCResult;
         if (!result.empty()) {
@@ -694,10 +741,10 @@ public:
             }
         }
 
+        if (MCCOutput) MCCTestCases = allCases;
         if (decisionCoverageOutput) decisionTestCases = calculateDecision();
         if (conditionCoverageOutput) conditionTestCases = calculateCondition();
         if (CDCOutput) CDCTestCases = calculateCDC();
-        if (MCCOutput) MCCTestCases = allCases;
         if (MCDCOutput) MCDCTestCases = calculateMCDC();
 
         llvm::errs() << "\n";
@@ -1112,8 +1159,8 @@ private:
             fileDir /= "kappa-"+fileName;
         string filePath = fileDir.string();
 
-        string ErrorInfo;
-        llvm::raw_fd_ostream outFile(filePath.c_str(), ErrorInfo, llvm::sys::fs::F_None);
+        std::error_code ErrorInfo;
+        llvm::raw_fd_ostream outFile(filePath.c_str(), ErrorInfo);
         rewriter->getEditBuffer(sourceCode.getSourceMgr().getMainFileID()).write(outFile); // --> this will write the result to outFile
         outFile.close();
     }
@@ -1134,7 +1181,7 @@ private:
                 if (CompoundStmt *compoundStmt = dyn_cast<CompoundStmt>(mainBody)) {
                     if (!compoundStmt->body_empty()) {
                         Stmt *firstStmt = *(compoundStmt->body_begin());
-                        rewriter->InsertTextAfter(firstStmt->getLocStart(), makeSymbolicStmt);
+                        rewriter->InsertTextAfter(firstStmt->getSourceRange().getBegin(), makeSymbolicStmt);
                     }
                 }
             }
@@ -1293,8 +1340,8 @@ private:
     ASTContext *astContext;
 
     // 获得array变量的元素类型
-    const Type * getRawElementTypeOfArray(const Type *arrayType) {
-        const Type *arrayElementType = arrayType->getArrayElementTypeNoTypeQual();
+    const clang::Type * getRawElementTypeOfArray(const clang::Type *arrayType) {
+        const clang::Type *arrayElementType = arrayType->getArrayElementTypeNoTypeQual();
         return arrayElementType->isArrayType()?getRawElementTypeOfArray(arrayElementType):arrayElementType;
     }
 
@@ -1303,7 +1350,7 @@ private:
         QualType qualType = rawType.getNonReferenceType().getUnqualifiedType();
         string varType = qualType.getAsString(printingPolicy);
         string varName = varDecl->getNameAsString();
-        const Type *type = qualType.getTypePtr()->getUnqualifiedDesugaredType();
+        const clang::Type *type = qualType.getTypePtr()->getUnqualifiedDesugaredType();
         string varDeclText = varType + " " + varName;
         string paramDeclText = sourceCode.getRewrittenText(varDecl->getSourceRange());
         eraseChar(paramDeclText, '&');
@@ -1369,7 +1416,7 @@ private:
             }
         }
         else if (type->isArrayType()) {
-            const Type *arrayElementType = getRawElementTypeOfArray(type);
+            const clang::Type *arrayElementType = getRawElementTypeOfArray(type);
             if (arrayElementType->isPointerType()) {
                 llvm::errs() << "ERROR : [" << varType << "] " << varName << " is an array of pointer!\n";
                 return false;
@@ -1512,13 +1559,13 @@ private:
         else
             sprintf(buffer, switchMatchFmtLast, switchCount++);
         if (genA) {
-            ARewriterWrapper->InsertTextBefore(switchStmt->getLocStart(), buffer);
+            ARewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
         }
         if (genD) {
-            DRewriterWrapper->InsertTextBefore(switchStmt->getLocStart(), buffer);
+            DRewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
         }
         if (genS) {
-            SRewriterWrapper->InsertTextBefore(switchStmt->getLocStart(), buffer);
+            SRewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
         }
         switchCase = switchCase->getNextSwitchCase();
         while (NULL != switchCase) {
@@ -1531,13 +1578,13 @@ private:
             }
             else sprintf(buffer, switchMatchFmtLast, switchCount++);
             if (genA) {
-                ARewriterWrapper->InsertTextBefore(switchStmt->getLocStart(), buffer);
+                ARewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
             }
             if (genD) {
-                DRewriterWrapper->InsertTextBefore(switchStmt->getLocStart(), buffer);
+                DRewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
             }
             if (genS) {
-                SRewriterWrapper->InsertTextBefore(switchStmt->getLocStart(), buffer);
+                SRewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
             }
             switchCase = switchCase->getNextSwitchCase();
         }
@@ -1576,19 +1623,19 @@ public:
         if (!isTargetFunction) return true;
 
         if (IfStmt *ifStmt = dyn_cast<IfStmt>(st)) {
-            insertKappaStmt(ifStmt->getCond(), targetFuncStartLoc, ifStmt->getLocStart(), ifStmt->getCond()->getSourceRange(), decisionCount);
+            insertKappaStmt(ifStmt->getCond(), targetFuncStartLoc, ifStmt->getSourceRange().getBegin(), ifStmt->getCond()->getSourceRange(), decisionCount);
             decisionCount++;
         }
         if (DoStmt *doStmt = dyn_cast<DoStmt>(st)) {
-            insertKappaStmt(doStmt->getCond(), targetFuncStartLoc, doStmt->getLocStart(), doStmt->getCond()->getSourceRange(), decisionCount);
+            insertKappaStmt(doStmt->getCond(), targetFuncStartLoc, doStmt->getSourceRange().getBegin(), doStmt->getCond()->getSourceRange(), decisionCount);
             decisionCount++;
         }
         if (WhileStmt *whileStmt = dyn_cast<WhileStmt>(st)) {
-            insertKappaStmt(whileStmt->getCond(), targetFuncStartLoc, whileStmt->getLocStart(), whileStmt->getCond()->getSourceRange(), decisionCount);
+            insertKappaStmt(whileStmt->getCond(), targetFuncStartLoc, whileStmt->getSourceRange().getBegin(), whileStmt->getCond()->getSourceRange(), decisionCount);
             decisionCount++;
         }
         if (ForStmt *forStmt = dyn_cast<ForStmt>(st)) {
-            insertKappaStmt(forStmt->getCond(), targetFuncStartLoc, forStmt->getLocStart(), forStmt->getCond()->getSourceRange(), decisionCount);
+            insertKappaStmt(forStmt->getCond(), targetFuncStartLoc, forStmt->getSourceRange().getBegin(), forStmt->getCond()->getSourceRange(), decisionCount);
             decisionCount++;
         }
         if (SwitchStmt *switchStmt = dyn_cast<SwitchStmt>(st)) {
@@ -1715,7 +1762,7 @@ public:
         if (CompoundStmt *compoundStmt = dyn_cast<CompoundStmt>(targetFuncBody)) {
             if (!compoundStmt->body_empty()) {
                 Stmt *firstStmt = *(compoundStmt->body_begin());
-                targetFuncStartLoc = firstStmt->getLocStart();
+                targetFuncStartLoc = firstStmt->getSourceRange().getBegin();
             }
         }
 
@@ -1755,14 +1802,17 @@ public:
 
 class KappaGenerateFrontendAction : public ASTFrontendAction {
 public:
-    void EndSourceFileAction() {
+    KappaGenerateFrontendAction() { }
+
+    void EndSourceFileAction() override {
         if (genA) {
             ARewriterWrapper->writeResult();
         }
     }
 
-    virtual ASTConsumer *CreateASTConsumer(CompilerInstance &CI, StringRef file) {
-        return new KappaGenerateASTConsumer(&CI); // pass CI pointer to ASTConsumer
+    std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
+                                                   StringRef file) override {
+        return llvm::make_unique<KappaGenerateASTConsumer>(&CI);
     }
 };
 
@@ -1812,7 +1862,7 @@ int main(int argc, const char **argv) {
     gettimeofday(&timeStart,NULL);
 
     // parse the command-line args passed to your code
-    CommonOptionsParser op(argc, argv);
+    CommonOptionsParser op(argc, argv, TCGCategory);
     // create a new Clang Tool instance (a LibTooling environment)
     ClangTool Tool(op.getCompilations(), op.getSourcePathList());
 
@@ -1824,7 +1874,7 @@ int main(int argc, const char **argv) {
     else if (!genS) genD = true;
 
     // run the Clang Tool, creating a new FrontendAction
-    int result = Tool.run(newFrontendActionFactory<KappaGenerateFrontendAction>());
+    int result = Tool.run(newFrontendActionFactory<KappaGenerateFrontendAction>().get());
 
     struct timeval timeCodeGenerationEnd;
     gettimeofday(&timeCodeGenerationEnd,NULL);
@@ -1835,6 +1885,9 @@ int main(int argc, const char **argv) {
     rawPath = rawPath.parent_path();
     rawPath /= resultDirStr;
 
+    string kleeIncludeDir = KleeIncludePath==""?"":"-I "+KleeIncludePath+" ";
+    string IgnorePrintfStr = IgnorePrintf?"-ignore-printf ":"";
+
     // 编译生成的代码，然后使用klee符号执行
     if (runKlee) {
         string grepStr;
@@ -1843,7 +1896,6 @@ int main(int argc, const char **argv) {
         else if (genS) grepStr = " | grep SEQ";
         else grepStr = " | grep -v 'statement\\|path'";
         string emitAllErrorsStr = EmitAllErrors?"-emit-all-errors ":"";
-        string noInterpolationStr = NoInterpolation?"-no-interpolation ":"";
         string shellScriptStr =
             "cd "+rawPath.string()+"\n"
             "for mode in `ls -1"+grepStr+"`; \n"
@@ -1852,12 +1904,10 @@ int main(int argc, const char **argv) {
             "        cd $mode\n"
             "        for sourceFile in `ls -v kappa-*.c`;\n"
             "        do\n"
-            "            /home/issta21-322/TracerX/llvm/Release/bin/clang -I /home/issta21-322/TracerX/tracerx/include "
-            "-c -O0 -emit-llvm -g $sourceFile\n"
-            "            /home/issta21-322/TracerX/tracerx/Release+Asserts/bin/klee --max-memory=32000 --max-time=3600 "
-            "-solver-backend=z3 --search=dfs --watchdog -dump-states-on-halt=0 -allow-external-sym-calls "
-            "-emit-all-errors-in-same-path -output-tree "+emitAllErrorsStr+noInterpolationStr+
-            "${sourceFile%.c}.bc\n"
+            "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -emit-llvm -g $sourceFile\n"
+            "            "+KleePath+" --max-memory=32000 --max-time=3600 -solver-backend=z3 --search=dfs --watchdog "
+            "-dump-states-on-halt=0 -emit-all-errors-in-same-path "
+            +emitAllErrorsStr+IgnorePrintfStr+"${sourceFile%.c}.bc\n"
             "        done\n"
             "        cd ../\n"
             "    fi\n"
@@ -1872,11 +1922,9 @@ int main(int argc, const char **argv) {
             "cd "+statementOutputPath.string()+"\n"
             "for sourceFile in `ls -v *.c`;\n"
             "do\n"
-            "    /home/issta21-322/TracerX/llvm/Release/bin/clang -I /home/issta21-322/TracerX/tracerx/include "
-            "    -c -O0 -emit-llvm -g $sourceFile\n"
-            "    /home/issta21-322/TracerX/tracerx/Release+Asserts/bin/klee --max-memory=32000 --max-time=3600 "
-            "    -solver-backend=z3 --search=dfs --watchdog -dump-states-on-halt=0 -allow-external-sym-calls "
-            "    --only-output-states-covering-new -no-interpolation ${sourceFile%.c}.bc\n"
+            "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -emit-llvm -g $sourceFile\n"
+            "            "+KleePath+" --max-memory=32000 --max-time=3600 -solver-backend=z3 --search=dfs --watchdog "
+            "-dump-states-on-halt=0 --only-output-states-covering-new "+IgnorePrintfStr+"${sourceFile%.c}.bc\n"
             "done\n";
         int returnCode = system(shellScriptStr.c_str());
         if (returnCode==-1) llvm::errs() << "Run Klee ERROR!\n";
@@ -1888,11 +1936,9 @@ int main(int argc, const char **argv) {
             "cd "+statementOutputPath.string()+"\n"
             "for sourceFile in `ls -v *.c`;\n"
             "do\n"
-            "    /home/issta21-322/TracerX/llvm/Release/bin/clang -I /home/issta21-322/TracerX/tracerx/include "
-            "    -c -O0 -emit-llvm -g $sourceFile\n"
-            "    /home/issta21-322/TracerX/tracerx/Release+Asserts/bin/klee --max-memory=32000 --max-time=3600 "
-            "    -solver-backend=z3 --search=dfs --watchdog -dump-states-on-halt=0 -allow-external-sym-calls "
-            "    -no-interpolation ${sourceFile%.c}.bc\n"
+            "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -emit-llvm -g $sourceFile\n"
+            "            "+KleePath+" --max-memory=32000 --max-time=3600 -solver-backend=z3 --search=dfs --watchdog "
+            "-dump-states-on-halt=0 "+IgnorePrintfStr+"${sourceFile%.c}.bc\n"
             "done\n";
         int returnCode = system(shellScriptStr.c_str());
         if (returnCode==-1) llvm::errs() << "Run Klee ERROR!\n";
@@ -1993,19 +2039,19 @@ int main(int argc, const char **argv) {
     // 根据选择的测试用例将对应的ktest文件复制到输出目录
     if (decisionCoverageOutput) {
         vector<fs::path> testCaseFiles = selectCoverageTestCase(testCaseSelectorList, switchTestCaseFile, validTestCase, "decision");
-        fs::path outputPath = rawPath / "postGen" / "decision";
+        fs::path outputPath = rawPath / "postGen" / "Decision";
         copyTestCaseFiles(testCaseFiles, outputPath);
         string decisionCoverageStr = formatDoubleValue((double)decisionGen*100/decisionAll, 2);
-        llvm::errs() << "decision coverage : " << decisionCoverageStr << "%\n";
-        coverageMessage += "decision coverage : "+decisionCoverageStr+"%\n";
+        llvm::errs() << "Decision Coverage : " << decisionCoverageStr << "%\n";
+        coverageMessage += "Decision Coverage : "+decisionCoverageStr+"%\n";
     }
     if (conditionCoverageOutput) {
         vector<fs::path> testCaseFiles = selectCoverageTestCase(testCaseSelectorList, switchTestCaseFile, validTestCase, "condition");
-        fs::path outputPath = rawPath / "postGen" / "condition";
+        fs::path outputPath = rawPath / "postGen" / "Condition";
         copyTestCaseFiles(testCaseFiles, outputPath);
         string conditionCoverageStr = formatDoubleValue((double)conditionGen*100/conditionAll, 2);
-        llvm::errs() << "condition coverage : " << conditionCoverageStr << "%\n";
-        coverageMessage += "condition coverage : "+conditionCoverageStr+"%\n";
+        llvm::errs() << "Condition Coverage : " << conditionCoverageStr << "%\n";
+        coverageMessage += "Condition Coverage : "+conditionCoverageStr+"%\n";
     }
     if (CDCOutput) {
         vector<fs::path> testCaseFiles = selectCoverageTestCase(testCaseSelectorList, switchTestCaseFile, validTestCase, "CDC");

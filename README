@@ -30,8 +30,7 @@ test.c 表示要测试的文件，一次只能有一个
 -genA -genD -genS 表示生成模式（A表示在一个文件上生成所有信息；D表示每个Decision单独生成一个文件；S表示每个测试用例单独生成一个文件）。
 这个主要是我自己做实验用，实际使用的话直接用-genA就可以了，另外两个不用加
 -runKlee 表示在生成文件后自动运行klee，默认开启
--debug 表示打印调试信息
--no-interpolation 关闭剪枝算法，使用原版klee
+-DEBUG 表示打印调试信息
 -emit-all-errors klee运行时添加emit-all-errors参数，若开启则KLEE会为同一个错误生成多个测试用例，否则每个错误只会生成一次，之后会忽略
 -boundary 为所有符号量设置上下限
 
