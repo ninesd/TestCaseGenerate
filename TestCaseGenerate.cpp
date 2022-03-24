@@ -355,8 +355,13 @@ private:
                 seqMatch[item.first].erase(item.second);
                 seqMatch[item.second].erase(item.first);
             }
-            for (pair<unsigned int, unsigned int> item : storedSeq) {
-                if (selected & 1LL<<item.second) storedSeq.erase(item.first);
+            for (auto it = storedSeq.begin(); it != storedSeq.end(); ) {
+                if (selected & 1LL<<(it->second)) {
+                    it = storedSeq.erase(it);
+                }
+                else {
+                    it++;
+                }
             }
         } while (!storedSeq.empty());
 
