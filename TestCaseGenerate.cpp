@@ -25,6 +25,8 @@
 #include <boost/regex.hpp>
 #include <sys/time.h>
 
+#define CLANG_VERSION 9
+
 using namespace std;
 using namespace clang;
 using namespace clang::driver;
@@ -108,6 +110,10 @@ cl::opt<string> KleePath("klee-path", cl::desc("Path of klee"), cl::init("klee")
 cl::opt<string> KleeIncludePath("klee-include-path", cl::desc("Path of klee include dir"), cl::init(""));
 cl::opt<string> ClangPath("clang-path", cl::desc("Path of clang"), cl::init("clang"));
 
+#if CLANG_VERSION == 3
+cl::opt<bool> NoInterpolation("no-interpolation", cl::desc("no interpolation"), cl::init(false));
+#endif
+
 enum class SearchPolicy {
     Auto,
     Search,
@@ -120,7 +126,12 @@ cl::opt<SearchPolicy> SearchMode(
         cl::values(
                 clEnumValN(SearchPolicy::Auto, "auto", "Switch between Search and Greedy depend on the input size"),
                 clEnumValN(SearchPolicy::Search, "search", "Always Search"),
-                clEnumValN(SearchPolicy::Greedy, "greedy", "Always Greedy")),
+                clEnumValN(SearchPolicy::Greedy, "greedy", "Always Greedy")
+#if CLANG_VERSION == 3
+                ,clEnumValEnd),
+#else
+                ),
+#endif
         cl::init(SearchPolicy::Auto));
 
 // 将src中的全部内容添加到dest中
@@ -1117,12 +1128,19 @@ const char expectDeclFmt[128] = "long long __expect__%d__%d__%u__ = %lld;\n";
 const char SCMaskDeclFmt[128] = "long long __SCMask__%d__%d__%u__ = %lld;\n";
 const char kappaRstFmt[128] = "\n(__kappa__%d__ = 0),\n";
 const char kappaCalcFmt[128] = "((__kappa__%d__ |= (1LL*(%s)<<%d)), (__kappa__%d__ & 1LL<<%d)!=0)\n";
-const char kappaMatchFmt[128] = "klee_assert(__kappa__%d__ ^ __expect__%d__%d__%u__ & __SCMask__%d__%d__%u__),\n";
 const char decisionReplaceFmt[128] = "%s(__dv__ = %s),\n%s__dv__\n";
 
+#if CLANG_VERSION == 3
+const char kappaMatchFmt[128] = "klee_assert(__kappa__%d__ ^ __expect__%d__%d__%u__ & __SCMask__%d__%d__%u__),\n";
 const char switchMatchFmtFirst[128] = "if ((%s) == (%s)) klee_assert(%d*0);\n";
 const char switchMatchFmt[128] = "else if ((%s) == (%s)) klee_assert(%d*0);\n";
 const char switchMatchFmtLast[128] = "else klee_assert(%d*0);\n";
+#else
+const char kappaMatchFmt[128] = "klee_trigger_if_false(__kappa__%d__ ^ __expect__%d__%d__%u__ & __SCMask__%d__%d__%u__),\n";
+const char switchMatchFmtFirst[128] = "if ((%s) == (%s)) klee_trigger_if_false(%d*0);\n";
+const char switchMatchFmt[128] = "else if ((%s) == (%s)) klee_trigger_if_false(%d*0);\n";
+const char switchMatchFmtLast[128] = "else klee_trigger_if_false(%d*0);\n";
+#endif
 
 #define MODE_ALL 3
 #define MODE_DEC 2
@@ -1159,8 +1177,15 @@ private:
             fileDir /= "kappa-"+fileName;
         string filePath = fileDir.string();
 
+// clang 3.4
+#if CLANG_VERSION == 3
+        string ErrorInfo;
+        llvm::raw_fd_ostream outFile(filePath.c_str(), ErrorInfo, llvm::sys::fs::F_None);
+#else
+// clang 9.0
         std::error_code ErrorInfo;
         llvm::raw_fd_ostream outFile(filePath.c_str(), ErrorInfo);
+#endif
         rewriter->getEditBuffer(sourceCode.getSourceMgr().getMainFileID()).write(outFile); // --> this will write the result to outFile
         outFile.close();
     }
@@ -1810,10 +1835,18 @@ public:
         }
     }
 
+// clang 3.4
+#if CLANG_VERSION == 3
+    virtual ASTConsumer *CreateASTConsumer(CompilerInstance &CI, StringRef file) {
+        return new KappaGenerateASTConsumer(&CI); // pass CI pointer to ASTConsumer
+    }
+#else
+// clang 9.0
     std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
                                                    StringRef file) override {
         return llvm::make_unique<KappaGenerateASTConsumer>(&CI);
     }
+#endif
 };
 
 
@@ -1862,7 +1895,13 @@ int main(int argc, const char **argv) {
     gettimeofday(&timeStart,NULL);
 
     // parse the command-line args passed to your code
+// clang 3.4
+#if CLANG_VERSION == 3
+    CommonOptionsParser op(argc, argv);
+#else
+    // clang 9.0
     CommonOptionsParser op(argc, argv, TCGCategory);
+#endif
     // create a new Clang Tool instance (a LibTooling environment)
     ClangTool Tool(op.getCompilations(), op.getSourcePathList());
 
@@ -1874,7 +1913,13 @@ int main(int argc, const char **argv) {
     else if (!genS) genD = true;
 
     // run the Clang Tool, creating a new FrontendAction
+// clang 3.4
+#if CLANG_VERSION == 3
+    int result = Tool.run(newFrontendActionFactory<KappaGenerateFrontendAction>());
+#else
+// clang 9.0
     int result = Tool.run(newFrontendActionFactory<KappaGenerateFrontendAction>().get());
+#endif
 
     struct timeval timeCodeGenerationEnd;
     gettimeofday(&timeCodeGenerationEnd,NULL);
@@ -1896,6 +1941,9 @@ int main(int argc, const char **argv) {
         else if (genS) grepStr = " | grep SEQ";
         else grepStr = " | grep -v 'statement\\|path'";
         string emitAllErrorsStr = EmitAllErrors?"-emit-all-errors ":"";
+#if CLANG_VERSION == 3
+        string noInterpolationStr = NoInterpolation?"-no-interpolation ":"";
+#endif
         string shellScriptStr =
             "cd "+rawPath.string()+"\n"
             "for mode in `ls -1"+grepStr+"`; \n"
@@ -1907,6 +1955,9 @@ int main(int argc, const char **argv) {
             "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -emit-llvm -g $sourceFile\n"
             "            "+KleePath+" --max-memory=32000 --max-time=3600 -solver-backend=z3 --search=dfs --watchdog "
             "-dump-states-on-halt=0 -emit-all-errors-in-same-path "
+#if CLANG_VERSION == 3
+            "-allow-external-sym-calls -output-tree "+noInterpolationStr
+#endif
             +emitAllErrorsStr+IgnorePrintfStr+"${sourceFile%.c}.bc\n"
             "        done\n"
             "        cd ../\n"
@@ -1924,6 +1975,9 @@ int main(int argc, const char **argv) {
             "do\n"
             "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -emit-llvm -g $sourceFile\n"
             "            "+KleePath+" --max-memory=32000 --max-time=3600 -solver-backend=z3 --search=dfs --watchdog "
+#if CLANG_VERSION == 3
+            "-allow-external-sym-calls -no-interpolation"
+#endif
             "-dump-states-on-halt=0 --only-output-states-covering-new "+IgnorePrintfStr+"${sourceFile%.c}.bc\n"
             "done\n";
         int returnCode = system(shellScriptStr.c_str());
@@ -1938,6 +1992,9 @@ int main(int argc, const char **argv) {
             "do\n"
             "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -emit-llvm -g $sourceFile\n"
             "            "+KleePath+" --max-memory=32000 --max-time=3600 -solver-backend=z3 --search=dfs --watchdog "
+#if CLANG_VERSION == 3
+            "-allow-external-sym-calls -no-interpolation"
+#endif
             "-dump-states-on-halt=0 "+IgnorePrintfStr+"${sourceFile%.c}.bc\n"
             "done\n";
         int returnCode = system(shellScriptStr.c_str());
@@ -1952,8 +2009,15 @@ int main(int argc, const char **argv) {
         validTestCase.push_back(map<unsigned int, fs::path>());
     }
     map<unsigned int, fs::path> switchTestCaseFile;
+#if CLANG_VERSION == 3
     boost::regex seqIdxReg("Error: ASSERTION FAIL: __kappa__(.+)__ \\^ __expect__(.+)__(.+)__(.+)__ & __SCMask__(.+)__(.+)__(.+)__");
     boost::regex switchSeqIdxReg("Error: ASSERTION FAIL: (.+)\\*0");
+    string fileSuffix = ".assert.err";
+#else
+    boost::regex seqIdxReg("Error: TRIGGER: __kappa__(.+)__ \\^ __expect__(.+)__(.+)__(.+)__ & __SCMask__(.+)__(.+)__(.+)__");
+    boost::regex switchSeqIdxReg("Error: TRIGGER: (.+)\\*0");
+    string fileSuffix = ".trigger.err";
+#endif
 
     // 分析符号执行的结果，提取出其中需要的测试用例组成测试用例集
     fs::path MCCResultPath = rawPath;
@@ -1971,7 +2035,7 @@ int main(int argc, const char **argv) {
             fs::path testCaseInfo = iter->path();
             string testCaseInfoPathString = testCaseInfo.leaf().string();
             // 寻找由于断言错误产生的测试用例
-            if (testCaseInfoPathString.find(".assert.err") == string::npos) continue;
+            if (testCaseInfoPathString.find(fileSuffix) == string::npos) continue;
             std::ifstream ifs(testCaseInfo.string());
             string testCaseInfoStr;
             getline(ifs, testCaseInfoStr);
@@ -1983,7 +2047,7 @@ int main(int argc, const char **argv) {
                     testCaseInfoStr.cbegin(), testCaseInfoStr.cend(), switchSeqIdxReg, 1);
             if (switchIdxIter != endIter) {
                 fs::path testCasePath = kleeOutputDir;
-                testCasePath /= testCaseInfoPathString.substr(0, testCaseInfoPathString.rfind(".assert.err"))+".ktest";
+                testCasePath /= testCaseInfoPathString.substr(0, testCaseInfoPathString.rfind(fileSuffix))+".ktest";
                 string switchIdxStr = *switchIdxIter;
                 int switchIdx = atoi(switchIdxStr.c_str());
                 switchTestCaseFile.insert(make_pair(switchIdx, testCasePath));
@@ -1997,7 +2061,7 @@ int main(int argc, const char **argv) {
                     testCaseInfoStr.cbegin(), testCaseInfoStr.cend(), seqIdxReg, 4);
             if (seqIdxIter != endIter) {
                 fs::path testCasePath = kleeOutputDir;
-                testCasePath /= testCaseInfoPathString.substr(0, testCaseInfoPathString.rfind(".assert.err"))+".ktest";
+                testCasePath /= testCaseInfoPathString.substr(0, testCaseInfoPathString.rfind(fileSuffix))+".ktest";
                 string decisionIdxStr = *decisionIdxIter;
                 string seqIdxStr = *seqIdxIter;
                 int decisionIdx = atoi(decisionIdxStr.c_str());
