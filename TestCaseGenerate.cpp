@@ -537,8 +537,6 @@ private:
                 result = greedyCondition(seqs, target);
         }
 
-        llvm::errs() << "SEARCH FINISHED!\n";
-
         vector<pair<long long, long long> > conditionResult;
         if (!result.empty()) {
             for (unsigned int item : result) {
@@ -1960,23 +1958,23 @@ int main(int argc, const char **argv) {
 #endif
         string shellScriptStr =
                 "cd "+rawPath.string()+"\n"
-                                       "for mode in `ls -1"+grepStr+"`; \n"
-                                                                    "do   \n"
-                                                                    "    if [ -d \"$mode\" ]; then\n"
-                                                                    "        cd $mode\n"
-                                                                    "        for sourceFile in `ls -v kappa-*.c`;\n"
-                                                                    "        do\n"
-                                                                    "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -emit-llvm -g $sourceFile\n"
-                                                                                                                "            "+KleePath+" --max-memory=32000 --max-time=3600 -solver-backend=z3 --search=dfs --watchdog "
-                                                                                                                                        "-dump-states-on-halt=0 -emit-all-errors-in-same-path "
-                #if CLANG_VERSION == 3
-                "-allow-external-sym-calls -output-tree "+noInterpolationStr
-                #endif
+                "for mode in `ls -1"+grepStr+"`; \n"
+                "do   \n"
+                "    if [ -d \"$mode\" ]; then\n"
+                "        cd $mode\n"
+                "        for sourceFile in `ls -v kappa-*.c`;\n"
+                "        do\n"
+                "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -emit-llvm -g $sourceFile\n"
+                "            "+KleePath+" --max-memory=32000 --max-time=3600 -solver-backend=z3 --search=dfs "
+                "-dump-states-on-halt=0 "
+#if CLANG_VERSION == 3
+                "-emit-all-errors-in-same-path -allow-external-sym-calls -output-tree "+noInterpolationStr
+#endif
                 +emitAllErrorsStr+IgnorePrintfStr+"${sourceFile%.c}.bc\n"
-                                                  "        done\n"
-                                                  "        cd ../\n"
-                                                  "    fi\n"
-                                                  "done";
+                "        done\n"
+                "        cd ../\n"
+                "    fi\n"
+                "done";
         int returnCode = system(shellScriptStr.c_str());
         if (returnCode==-1) llvm::errs() << "Run Klee ERROR!\n";
     }
@@ -1985,15 +1983,15 @@ int main(int argc, const char **argv) {
         fs::path statementOutputPath = rawPath / "statement";
         string shellScriptStr =
                 "cd "+statementOutputPath.string()+"\n"
-                                                   "for sourceFile in `ls -v *.c`;\n"
-                                                   "do\n"
-                                                   "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -emit-llvm -g $sourceFile\n"
-                                                                                               "            "+KleePath+" --max-memory=32000 --max-time=3600 -solver-backend=z3 --search=dfs --watchdog "
-                                                                                                                       #if CLANG_VERSION == 3
-                                                                                                                       "-allow-external-sym-calls -no-interpolation"
-                                                                                                                       #endif
-                                                                                                                       "-dump-states-on-halt=0 --only-output-states-covering-new "+IgnorePrintfStr+"${sourceFile%.c}.bc\n"
-                                                                                                                                                                                                   "done\n";
+                "for sourceFile in `ls -v *.c`;\n"
+                "do\n"
+                "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -emit-llvm -g $sourceFile\n"
+                "            "+KleePath+" --max-memory=32000 --max-time=3600 -solver-backend=z3 --search=dfs "
+#if CLANG_VERSION == 3
+                "-allow-external-sym-calls -no-interpolation"
+#endif
+                "-dump-states-on-halt=0 --only-output-states-covering-new "+IgnorePrintfStr+"${sourceFile%.c}.bc\n"
+                "done\n";
         int returnCode = system(shellScriptStr.c_str());
         if (returnCode==-1) llvm::errs() << "Run Klee ERROR!\n";
     }
@@ -2002,15 +2000,15 @@ int main(int argc, const char **argv) {
         fs::path statementOutputPath = rawPath / "path";
         string shellScriptStr =
                 "cd "+statementOutputPath.string()+"\n"
-                                                   "for sourceFile in `ls -v *.c`;\n"
-                                                   "do\n"
-                                                   "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -emit-llvm -g $sourceFile\n"
-                                                                                               "            "+KleePath+" --max-memory=32000 --max-time=3600 -solver-backend=z3 --search=dfs --watchdog "
-                                                                                                                       #if CLANG_VERSION == 3
-                                                                                                                       "-allow-external-sym-calls -no-interpolation"
-                                                                                                                       #endif
-                                                                                                                       "-dump-states-on-halt=0 "+IgnorePrintfStr+"${sourceFile%.c}.bc\n"
-                                                                                                                                                                 "done\n";
+                "for sourceFile in `ls -v *.c`;\n"
+                "do\n"
+                "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -emit-llvm -g $sourceFile\n"
+                "            "+KleePath+" --max-memory=32000 --max-time=3600 -solver-backend=z3 --search=dfs "
+#if CLANG_VERSION == 3
+                "-allow-external-sym-calls -no-interpolation"
+#endif
+                "-dump-states-on-halt=0 "+IgnorePrintfStr+"${sourceFile%.c}.bc\n"
+                "done\n";
         int returnCode = system(shellScriptStr.c_str());
         if (returnCode==-1) llvm::errs() << "Run Klee ERROR!\n";
     }
