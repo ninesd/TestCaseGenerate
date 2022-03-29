@@ -1156,6 +1156,7 @@ private:
     int count;
     int mode;
     string coverage;
+    vector<pair<SourceLocation, string>> decisionTextList;
 
     // 将编辑后的内容写入本地
     void writeNewFile(shared_ptr<Rewriter> rewriter, string pathString, string coverage, int mode=-1, int count=0) {
@@ -1233,12 +1234,17 @@ private:
                 rewriter->ReplaceText(externVarDel->getSourceRange(), varDeclStr);
             }
         }
+
+        // 添加原decision注释
+        for (pair<SourceLocation, string> decisionText : decisionTextList)
+            rewriter->InsertTextAfter(decisionText.first, decisionText.second);
     }
 
     // 重置Rewriter，恢复原始文本
     void resetRewriter() {
         rewriter = make_shared<Rewriter>();
         rewriter->setSourceMgr(astContext->getSourceManager(), astContext->getLangOpts());
+        decisionTextList.clear();
     }
 
 
@@ -1323,7 +1329,7 @@ public:
         }
 
         // 添加原decision注释
-        rewriter->InsertTextAfter(decisionStartLoc, "// "+sourceCode.getRewrittenText(decision->getSourceRange())+"\n");
+        decisionTextList.push_back(make_pair(decisionStartLoc, "\n// "+sourceCode.getRewrittenText(decision->getSourceRange())+"\n"));
     }
 
     // 添加kappa stmt 单个expect
@@ -1965,7 +1971,7 @@ int main(int argc, const char **argv) {
                 "        for sourceFile in `ls -v kappa-*.c`;\n"
                 "        do\n"
                 "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -emit-llvm -g $sourceFile\n"
-                "            "+KleePath+" --max-memory=32000 --max-time=3600 -solver-backend=z3 --search=dfs "
+                "            "+KleePath+" --max-memory=64000 -solver-backend=z3 --search=dfs "
                 "-dump-states-on-halt=0 "
 #if CLANG_VERSION == 3
                 "-emit-all-errors-in-same-path -allow-external-sym-calls -output-tree "+noInterpolationStr
@@ -1986,7 +1992,7 @@ int main(int argc, const char **argv) {
                 "for sourceFile in `ls -v *.c`;\n"
                 "do\n"
                 "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -emit-llvm -g $sourceFile\n"
-                "            "+KleePath+" --max-memory=32000 --max-time=3600 -solver-backend=z3 --search=dfs "
+                "            "+KleePath+" --max-memory=64000 -solver-backend=z3 --search=dfs "
 #if CLANG_VERSION == 3
                 "-allow-external-sym-calls -no-interpolation"
 #endif
@@ -2003,7 +2009,7 @@ int main(int argc, const char **argv) {
                 "for sourceFile in `ls -v *.c`;\n"
                 "do\n"
                 "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -emit-llvm -g $sourceFile\n"
-                "            "+KleePath+" --max-memory=32000 --max-time=3600 -solver-backend=z3 --search=dfs "
+                "            "+KleePath+" --max-memory=64000 -solver-backend=z3 --search=dfs "
 #if CLANG_VERSION == 3
                 "-allow-external-sym-calls -no-interpolation"
 #endif
