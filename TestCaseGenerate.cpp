@@ -61,7 +61,7 @@ string makeSymbolicStmt;
 string resultDirStr;
 
 // 文件路径
-string pathString;
+string pathString, preprocessedPathString;
 
 // 测试用例序列编号与真值与文本的相关信息，用于从生成的MCC测试用例中挑选需要的测试用例
 vector<map<unsigned int, pair<long long, long long> > > trueSeqNum2ExpectList;
@@ -72,7 +72,7 @@ vector<string> decisionTextList;
 
 // 记录所有真值表的数量
 vector<int> allCaseCnt;
-int MCDCGen, MCDCAll, CDCGen, CDCAll, conditionGen, conditionAll, decisionGen, decisionAll, MCCGen, MCCAll;
+int MCDCGen, MCDCAll, CDCGen, CDCAll, conditionGen, conditionAll, decisionGen, decisionAll, MCCGen, MCCAll, SwitchGen, SwitchAll;
 
 // 记录找到的所有extern变量
 set<VarDecl*> externVariables;
@@ -1281,12 +1281,9 @@ public:
 
     // 将编辑后的内容写入本地
     void writeResult() {
-        SourceManager &SM = sourceCode.getSourceMgr();
-        string filePath = SM.getFileEntryForID(SM.getMainFileID())->getName();
-
         postEditRewriter();
 
-        writeNewFile(rewriter, filePath, coverage, mode, count);
+        writeNewFile(rewriter, pathString, coverage, mode, count);
         count++;
 
         resetRewriter();
@@ -1297,16 +1294,12 @@ public:
                       map<pair<long long, long long>, unsigned int> &expect2SeqNum,
                       SourceLocation declLoc, SourceLocation decisionStartLoc, SourceRange decisionSourceRange, int decisionCount, unsigned int trueCaseNum) {
         char buffer[2048];
-        llvm::errs() << "decision Text before is :" << rewriter->getRewrittenText(decisionSourceRange) << "\n";
 
         // 替换condition
         for (unsigned int i=0; i<conditions.size(); i++) {
-            llvm::errs() << "condition Text before is :" << sourceCode.getRewrittenText(conditions.at(i)->getSourceRange()) << "\n";
             string conditionString = sourceCode.getRewrittenText(conditions.at(i)->getSourceRange());
             sprintf(buffer, kappaCalcFmt, decisionCount, conditionString.c_str(), i, decisionCount, i);
-            llvm::errs() << "condition Text REPLACE is :" << buffer << "\n";
             rewriter->ReplaceText(conditions.at(i)->getSourceRange(), buffer);
-            llvm::errs() << "condition Text after is :" << rewriter->getRewrittenText(conditions.at(i)->getSourceRange()) << "\n";
         }
 
         // 生成断言语句
@@ -1317,7 +1310,6 @@ public:
             kappaMatchStmt += buffer;
         }
 
-        llvm::errs() << "decision Text after is :" << rewriter->getRewrittenText(decisionSourceRange) << "\n";
         // 替换整个decision
         char kappaRstStmt[255];
         sprintf(kappaRstStmt, kappaRstFmt, decisionCount);
@@ -1624,11 +1616,14 @@ private:
                 sprintf(buffer, switchMatchFmtFirst, cond.c_str(), condCase.c_str(), switchCount++);
             else
                 sprintf(buffer, switchMatchFmt, cond.c_str(), condCase.c_str(), switchCount++);
+            SwitchAll++;
         }
         else if (NULL == switchCase->getNextSwitchCase())
             return;
-        else
+        else {
             sprintf(buffer, switchMatchFmtLast, switchCount++);
+            SwitchAll++;
+        }
         if (genA) {
             ARewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
         }
@@ -1648,6 +1643,7 @@ private:
                     sprintf(buffer, switchMatchFmt, cond.c_str(), condCase.c_str(), switchCount++);
             }
             else sprintf(buffer, switchMatchFmtLast, switchCount++);
+            SwitchAll++;
             if (genA) {
                 ARewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
             }
@@ -1774,8 +1770,6 @@ private:
 
     // 重置输出文件夹
     void resetOutputDir() {
-        SourceManager &SM = sourceCode.getSourceMgr();
-        string pathString = SM.getFileEntryForID(SM.getMainFileID())->getName();
         fs::path rawPath(pathString);
         resultDirStr = "result-" + rawPath.leaf().string();
         resetSingleDir(pathString, "", true);
@@ -1836,8 +1830,8 @@ public:
                 targetFuncStartLoc = firstStmt->getSourceRange().getBegin();
             }
         }
-        SourceManager &SM = sourceCode.getSourceMgr();
-        pathString = SM.getFilename(targetFuncStartLoc);
+//        SourceManager &SM = sourceCode.getSourceMgr();
+//        pathString = SM.getFilename(targetFuncStartLoc);
 
         // 遍历源代码生成驱动函数代码
         driverFuncGenerateVisitor->TraverseDecl(Context.getTranslationUnitDecl());
@@ -1893,6 +1887,90 @@ public:
     std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
                                                    StringRef file) override {
         return llvm::make_unique<KappaGenerateASTConsumer>(&CI);
+    }
+#endif
+};
+
+
+shared_ptr<Rewriter> preProcessorRewriter;
+
+// 添加必要的括号
+class PreProcessorVisitor : public RecursiveASTVisitor<PreProcessorVisitor> {
+private:
+    ASTContext *astContext;
+
+public:
+    explicit PreProcessorVisitor(CompilerInstance *CI)
+            : astContext(&(CI->getASTContext())) {
+        preProcessorRewriter = make_shared<Rewriter>();
+        preProcessorRewriter->setSourceMgr(astContext->getSourceManager(), astContext->getLangOpts());
+    }
+
+    virtual bool VisitStmt(Stmt *st) {
+        if (IfStmt *ifStmt = dyn_cast<IfStmt>(st)) {
+            Expr * expr = ifStmt->getCond();
+            preProcessorRewriter->ReplaceText(expr->getSourceRange(), "("+preProcessorRewriter->getRewrittenText(expr->getSourceRange())+")");
+        }
+        return true;
+    }
+};
+
+
+class PreProcessorASTConsumer : public ASTConsumer {
+private:
+    PreProcessorVisitor *preProcessorVisitor;
+
+public:
+    explicit PreProcessorASTConsumer(CompilerInstance *CI)
+            : preProcessorVisitor(new PreProcessorVisitor(CI))
+    { }
+
+    virtual void HandleTranslationUnit(ASTContext &Context) {
+        preProcessorVisitor->TraverseDecl(Context.getTranslationUnitDecl());
+    }
+};
+
+
+class PreProcessorFrontendAction : public ASTFrontendAction {
+public:
+    PreProcessorFrontendAction() { }
+
+    void EndSourceFileAction() override {
+        SourceManager &SM = preProcessorRewriter->getSourceMgr();
+        pathString = SM.getFileEntryForID(SM.getMainFileID())->getName();
+        fs::path rawPath(pathString);
+        fs::path fileDir = rawPath.parent_path();
+
+        string fileName = rawPath.filename().string();
+        fileDir /= "preProcessed-"+fileName;
+        string pathString = fileDir.string();
+        if (fs::exists(fileDir)) fs::remove_all(fileDir);
+
+        preprocessedPathString = "preProcessed-"+fileName;
+
+// clang 3.4
+#if CLANG_VERSION == 3
+        string ErrorInfo;
+        llvm::raw_fd_ostream outFile(pathString.c_str(), ErrorInfo, llvm::sys::fs::F_None);
+#else
+// clang 9.0
+        std::error_code ErrorInfo;
+        llvm::raw_fd_ostream outFile(pathString.c_str(), ErrorInfo);
+#endif
+        preProcessorRewriter->getEditBuffer(preProcessorRewriter->getSourceMgr().getMainFileID()).write(outFile); // --> this will write the result to outFile
+        outFile.close();
+    }
+
+// clang 3.4
+#if CLANG_VERSION == 3
+    virtual ASTConsumer *CreateASTConsumer(CompilerInstance &CI, StringRef file) {
+        return new PreProcessorASTConsumer(&CI); // pass CI pointer to ASTConsumer
+    }
+#else
+// clang 9.0
+    std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
+                                                   StringRef file) override {
+        return llvm::make_unique<PreProcessorASTConsumer>(&CI);
     }
 #endif
 };
@@ -1961,12 +2039,20 @@ int main(int argc, const char **argv) {
     else if (!genS) genD = true;
 
     // run the Clang Tool, creating a new FrontendAction
+    int result;
+    vector<string> sourcePathList;
 // clang 3.4
 #if CLANG_VERSION == 3
-    int result = Tool.run(newFrontendActionFactory<KappaGenerateFrontendAction>());
+    result = Tool.run(newFrontendActionFactory<PreProcessorFrontendAction>());
+    sourcePathList.push_back(preprocessedPathString);
+    ClangTool Tool2(op.getCompilations(), sourcePathList);
+    result = Tool2.run(newFrontendActionFactory<KappaGenerateFrontendAction>());
 #else
 // clang 9.0
-    int result = Tool.run(newFrontendActionFactory<KappaGenerateFrontendAction>().get());
+    result = Tool.run(newFrontendActionFactory<PreProcessorFrontendAction>().get());
+    sourcePathList.push_back(preprocessedPathString);
+    ClangTool Tool2(op.getCompilations(), sourcePathList);
+    result = Tool2.run(newFrontendActionFactory<KappaGenerateFrontendAction>().get());
 #endif
 
     struct timeval timeCodeGenerationEnd;
@@ -1991,6 +2077,7 @@ int main(int argc, const char **argv) {
         else if (genS) grepStr = " | grep SEQ";
         else grepStr = " | grep -v 'statement\\|path'";
         string emitAllErrorsStr = EmitAllErrors?"-emit-all-errors ":"";
+        string emitAllErrorsInSamePathStr = genA?"-emit-all-errors-in-same-path ":"";
 #if CLANG_VERSION == 3
         string noInterpolationStr = NoInterpolation?"-no-interpolation ":"";
 #endif
@@ -2008,7 +2095,7 @@ int main(int argc, const char **argv) {
 #if CLANG_VERSION == 3
                 "-emit-all-errors-in-same-path -allow-external-sym-calls -output-tree "+noInterpolationStr
 #endif
-                +emitAllErrorsStr+IgnorePrintfStr+"${sourceFile%.c}.bc\n"
+                +emitAllErrorsStr+emitAllErrorsInSamePathStr+IgnorePrintfStr+"${sourceFile%.c}.bc\n"
                 "        done\n"
                 "        cd ../\n"
                 "    fi\n"
@@ -2101,6 +2188,7 @@ int main(int argc, const char **argv) {
                 string switchIdxStr = *switchIdxIter;
                 int switchIdx = atoi(switchIdxStr.c_str());
                 switchTestCaseFile.insert(make_pair(switchIdx, testCasePath));
+                SwitchGen++;
                 continue;
             }
 
@@ -2196,6 +2284,11 @@ int main(int argc, const char **argv) {
         string MCCStr = formatDoubleValue((double)MCCGen*100/MCCAll, 2);
         llvm::errs() << "MCC : " << MCCStr << "%\n";
         coverageMessage += "MCC : "+MCCStr+"%\n";
+    }
+    if (SwitchAll != 0) {
+        string SwitchStr = formatDoubleValue((double)SwitchGen*100/SwitchAll, 2);
+        llvm::errs() << "Switch : " << SwitchStr << "%\n";
+        coverageMessage += "Switch : "+SwitchStr+"%\n";
     }
 
     struct timeval timeAllEnd;
