@@ -2093,7 +2093,7 @@ int main(int argc, const char **argv) {
                 "            "+KleePath+" --max-memory=64000 -solver-backend=z3 --search=dfs "
                 "-dump-states-on-halt=0 "
 #if CLANG_VERSION == 3
-                "-emit-all-errors-in-same-path -allow-external-sym-calls -output-tree "+noInterpolationStr
+                "-allow-external-sym-calls -output-tree "+noInterpolationStr
 #endif
                 +emitAllErrorsStr+emitAllErrorsInSamePathStr+IgnorePrintfStr+"${sourceFile%.c}.bc\n"
                 "        done\n"
