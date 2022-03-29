@@ -25,7 +25,7 @@
 #include <boost/regex.hpp>
 #include <sys/time.h>
 
-#define CLANG_VERSION 3
+#define CLANG_VERSION 9
 
 using namespace std;
 using namespace clang;
