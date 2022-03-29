@@ -60,6 +60,9 @@ string makeSymbolicStmt;
 // 输出文件夹名
 string resultDirStr;
 
+// 文件路径
+string pathString;
+
 // 测试用例序列编号与真值与文本的相关信息，用于从生成的MCC测试用例中挑选需要的测试用例
 vector<map<unsigned int, pair<long long, long long> > > trueSeqNum2ExpectList;
 vector<map<unsigned int, pair<long long, long long> > > falseSeqNum2ExpectList;
@@ -864,24 +867,24 @@ private:
                 return false;
             }
         }
-            // ParenExpr 括号
+        // ParenExpr 括号
         else if (ParenExpr *parenExpr = dyn_cast<ParenExpr>(expr)) {
             if (DEBUG) llvm::errs() << "ParenExpr : " << sourceCode.getRewrittenText(expr->getSourceRange()) << "\n";
             return travelExpr(parenExpr->getSubExpr(), node);
         }
-            // CastExpr 类型转换
+        // CastExpr 类型转换
         else if (CastExpr *castExpr = dyn_cast<CastExpr>(expr)) {
             if (DEBUG) llvm::errs() << "CastExpr : " << sourceCode.getRewrittenText(expr->getSourceRange()) << "\n";
             return travelExpr(castExpr->getSubExpr(), node);
         }
-            // condition
+        // condition
         else if (isCondition(expr)) {
             if (DEBUG) llvm::errs() << "Condition : " << sourceCode.getRewrittenText(expr->getSourceRange()) << "\n";
             node->conditionNum = conditions.size();
             conditions.push_back(expr);
             return true;
         }
-            // dividable 二元运算符，且本身可以再分
+        // dividable 二元运算符
         else if (BinaryOperator *binaryOperator = dyn_cast<BinaryOperator>(expr)) {
             if (DEBUG) llvm::errs() << "BinaryOperator : " << sourceCode.getRewrittenText(expr->getSourceRange()) <<
                                     "\nLHS : " << sourceCode.getRewrittenText(binaryOperator->getLHS()->getSourceRange()) << "    RHS : " <<
@@ -890,8 +893,12 @@ private:
                 case BO_LAnd: node->op ^= AND; break;
                 case BO_LOr: node->op ^= OR; break;
                 case BO_EQ: node->op ^= XOR; node->op ^= NOT; break;
-                case BO_NE:  node->op ^= XOR; break;
-                default : node->op = 0;
+                case BO_NE: node->op ^= XOR; break;
+                default :
+                    if (DEBUG) llvm::errs() << "Condition : " << sourceCode.getRewrittenText(expr->getSourceRange()) << "\n";
+                    node->conditionNum = conditions.size();
+                    conditions.push_back(expr);
+                    return true;
             }
             node->left = make_shared<LogicExpressionNode>();
             node->left->parent = node;
@@ -900,6 +907,20 @@ private:
             bool lhs = travelExpr(binaryOperator->getLHS(), node->left);
             bool rhs = travelExpr(binaryOperator->getRHS(), node->right);
             return lhs && rhs;
+        }
+        // 单独的值 e.g. if(tmp)
+        else if (DeclRefExpr *declRefExpr = dyn_cast<DeclRefExpr>(expr)) {
+            if (DEBUG) llvm::errs() << "Condition : " << sourceCode.getRewrittenText(expr->getSourceRange()) << "\n";
+            node->conditionNum = conditions.size();
+            conditions.push_back(expr);
+            return true;
+        }
+        // 函数调用 e.g. if(func(tmp))
+        else if (CallExpr *callExpr = dyn_cast<CallExpr>(expr)) {
+            if (DEBUG) llvm::errs() << "Function Call : " << sourceCode.getRewrittenText(expr->getSourceRange()) << "\n";
+            node->conditionNum = conditions.size();
+            conditions.push_back(expr);
+            return true;
         }
         else {
             llvm::errs() << "ERROR not matched : " << sourceCode.getRewrittenText(expr->getSourceRange()) << "\n";
@@ -1128,7 +1149,7 @@ const char kappaDeclFmt[128] = "long long __kappa__%d__;\n";
 const char expectDeclFmt[128] = "long long __expect__%d__%d__%u__ = %lld;\n";
 const char SCMaskDeclFmt[128] = "long long __SCMask__%d__%d__%u__ = %lld;\n";
 const char kappaRstFmt[128] = "\n(__kappa__%d__ = 0),\n";
-const char kappaCalcFmt[128] = "((__kappa__%d__ |= (1LL*(%s)<<%d)), (__kappa__%d__ & 1LL<<%d)!=0)\n";
+const char kappaCalcFmt[128] = "((__kappa__%d__ |= (1LL*((%s)!=0)<<%d)), (__kappa__%d__ & 1LL<<%d)!=0)\n";
 const char decisionReplaceFmt[128] = "%s(__dv__ = %s),\n%s__dv__\n";
 
 #if CLANG_VERSION == 3
@@ -1138,7 +1159,7 @@ const char switchMatchFmt[128] = "else if ((%s) == (%s)) klee_assert(%d*0);\n";
 const char switchMatchFmtLast[128] = "else klee_assert(%d*0);\n";
 #else
 const char kappaMatchFmt[128] = "klee_trigger_if_false(__kappa__%d__ ^ __expect__%d__%d__%u__ & __SCMask__%d__%d__%u__),\n";
-const char switchMatchFmtFirst[128] = "if ((%s) == (%s)) klee_trigger_if_false(%d*0);\n";
+const char switchMatchFmtFirst[128] = "\nif ((%s) == (%s)) klee_trigger_if_false(%d*0);\n";
 const char switchMatchFmt[128] = "else if ((%s) == (%s)) klee_trigger_if_false(%d*0);\n";
 const char switchMatchFmtLast[128] = "else klee_trigger_if_false(%d*0);\n";
 #endif
@@ -1276,16 +1297,19 @@ public:
                       map<pair<long long, long long>, unsigned int> &expect2SeqNum,
                       SourceLocation declLoc, SourceLocation decisionStartLoc, SourceRange decisionSourceRange, int decisionCount, unsigned int trueCaseNum) {
         char buffer[2048];
+        llvm::errs() << "decision Text before is :" << rewriter->getRewrittenText(decisionSourceRange) << "\n";
 
-        char kappaRstStmt[255];
-        sprintf(kappaRstStmt, kappaRstFmt, decisionCount);
-
+        // 替换condition
         for (unsigned int i=0; i<conditions.size(); i++) {
+            llvm::errs() << "condition Text before is :" << sourceCode.getRewrittenText(conditions.at(i)->getSourceRange()) << "\n";
             string conditionString = sourceCode.getRewrittenText(conditions.at(i)->getSourceRange());
             sprintf(buffer, kappaCalcFmt, decisionCount, conditionString.c_str(), i, decisionCount, i);
+            llvm::errs() << "condition Text REPLACE is :" << buffer << "\n";
             rewriter->ReplaceText(conditions.at(i)->getSourceRange(), buffer);
+            llvm::errs() << "condition Text after is :" << rewriter->getRewrittenText(conditions.at(i)->getSourceRange()) << "\n";
         }
 
+        // 生成断言语句
         string kappaMatchStmt = "";
         for (unsigned int i=0; i<expect.size(); i++) {
             sprintf(buffer, kappaMatchFmt, decisionCount, decisionCount, i, expect2SeqNum[expect.at(i)],
@@ -1293,6 +1317,10 @@ public:
             kappaMatchStmt += buffer;
         }
 
+        llvm::errs() << "decision Text after is :" << rewriter->getRewrittenText(decisionSourceRange) << "\n";
+        // 替换整个decision
+        char kappaRstStmt[255];
+        sprintf(kappaRstStmt, kappaRstFmt, decisionCount);
         sprintf(buffer, decisionReplaceFmt, kappaRstStmt, rewriter->getRewrittenText(decisionSourceRange).c_str(),
                 kappaMatchStmt.c_str());
         rewriter->ReplaceText(decisionSourceRange, buffer);
@@ -1342,6 +1370,10 @@ public:
     }
 
     void InsertTextBefore(SourceLocation loc, string str) {
+        rewriter->InsertTextBefore(loc, str);
+    }
+
+    void InsertTextAfter(SourceLocation loc, string str) {
         rewriter->InsertTextAfter(loc, str);
     }
 };
@@ -1804,6 +1836,8 @@ public:
                 targetFuncStartLoc = firstStmt->getSourceRange().getBegin();
             }
         }
+        SourceManager &SM = sourceCode.getSourceMgr();
+        pathString = SM.getFilename(targetFuncStartLoc);
 
         // 遍历源代码生成驱动函数代码
         driverFuncGenerateVisitor->TraverseDecl(Context.getTranslationUnitDecl());
@@ -1938,8 +1972,6 @@ int main(int argc, const char **argv) {
     struct timeval timeCodeGenerationEnd;
     gettimeofday(&timeCodeGenerationEnd,NULL);
 
-    SourceManager &SM = sourceCode.getSourceMgr();
-    string pathString = SM.getFileEntryForID(SM.getMainFileID())->getName();
     fs::path rawPath(pathString);
     rawPath = rawPath.parent_path();
     rawPath /= resultDirStr;
