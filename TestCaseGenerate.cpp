@@ -25,7 +25,7 @@
 #include <boost/regex.hpp>
 #include <sys/time.h>
 
-#define CLANG_VERSION 9
+#define CLANG_VERSION 3
 
 using namespace std;
 using namespace clang;
@@ -909,14 +909,14 @@ private:
             return lhs && rhs;
         }
         // 单独的值 e.g. if(tmp)
-        else if (DeclRefExpr *declRefExpr = dyn_cast<DeclRefExpr>(expr)) {
+        else if (isa<DeclRefExpr>(expr)) {
             if (DEBUG) llvm::errs() << "Condition : " << sourceCode.getRewrittenText(expr->getSourceRange()) << "\n";
             node->conditionNum = conditions.size();
             conditions.push_back(expr);
             return true;
         }
         // 函数调用 e.g. if(func(tmp))
-        else if (CallExpr *callExpr = dyn_cast<CallExpr>(expr)) {
+        else if (isa<CallExpr>(expr)) {
             if (DEBUG) llvm::errs() << "Function Call : " << sourceCode.getRewrittenText(expr->getSourceRange()) << "\n";
             node->conditionNum = conditions.size();
             conditions.push_back(expr);
