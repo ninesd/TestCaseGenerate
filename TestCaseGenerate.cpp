@@ -1207,7 +1207,13 @@ private:
         fs::path rawPath(pathString);
         fs::path fileDir = rawPath.parent_path();
         fileDir /= resultDirStr;
-        fileDir /= KappaSubDirNameStr;
+
+        if (coverage == "statement")
+            fileDir /= "Statement";
+        else if (coverage == "path")
+            fileDir /= "Path";
+        else
+            fileDir /= KappaSubDirNameStr;
 
         string fileName = rawPath.filename().string();
         if (mode == MODE_DEC || mode == MODE_SEQ) fileName.insert(fileName.rfind('.'), "_"+to_string(count));
@@ -1218,12 +1224,10 @@ private:
             fileDir /= "kappa-"+fileName;
         string filePath = fileDir.string();
 
-// clang 3.4
 #if CLANG_VERSION == 3
         string ErrorInfo;
         llvm::raw_fd_ostream outFile(filePath.c_str(), ErrorInfo, llvm::sys::fs::F_None);
 #else
-// clang 9.0
         std::error_code ErrorInfo;
         llvm::raw_fd_ostream outFile(filePath.c_str(), ErrorInfo);
 #endif
@@ -1795,8 +1799,8 @@ private:
         resultDirStr = "result-" + rawPath.leaf().string();
         resetSingleDir(pathString, "", true);
         resetSingleDir(pathString, KappaSubDirNameStr, true);
-        resetSingleDir(pathString, "statement", statementCoverageOutput);
-        resetSingleDir(pathString, "path", pathCoverageOutput);
+        resetSingleDir(pathString, "Statement", statementCoverageOutput);
+        resetSingleDir(pathString, "Path", pathCoverageOutput);
     }
 
 public:
@@ -1840,7 +1844,6 @@ public:
             targetFuncDecl = funcDeclList.at(funcDeclIdx-1);
         }
 
-
         Stmt *targetFuncBody = targetFuncDecl->getBody();
         if (CompoundStmt *compoundStmt = dyn_cast<CompoundStmt>(targetFuncBody)) {
             if (!compoundStmt->body_empty()) {
@@ -1848,8 +1851,6 @@ public:
                 targetFuncStartLoc = firstStmt->getSourceRange().getBegin();
             }
         }
-//        SourceManager &SM = sourceCode.getSourceMgr();
-//        pathString = SM.getFilename(targetFuncStartLoc);
 
         // 遍历源代码生成驱动函数代码
         driverFuncGenerateVisitor->TraverseDecl(Context.getTranslationUnitDecl());
@@ -1895,13 +1896,11 @@ public:
         }
     }
 
-// clang 3.4
 #if CLANG_VERSION == 3
     virtual ASTConsumer *CreateASTConsumer(CompilerInstance &CI, StringRef file) {
         return new KappaGenerateASTConsumer(&CI); // pass CI pointer to ASTConsumer
     }
 #else
-// clang 9.0
     std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
                                                    StringRef file) override {
         return llvm::make_unique<KappaGenerateASTConsumer>(&CI);
@@ -1966,12 +1965,10 @@ public:
 
         preprocessedPathString = "PreProcessed-"+fileName;
 
-// clang 3.4
 #if CLANG_VERSION == 3
         string ErrorInfo;
         llvm::raw_fd_ostream outFile(pathString.c_str(), ErrorInfo, llvm::sys::fs::F_None);
 #else
-// clang 9.0
         std::error_code ErrorInfo;
         llvm::raw_fd_ostream outFile(pathString.c_str(), ErrorInfo);
 #endif
@@ -1979,13 +1976,11 @@ public:
         outFile.close();
     }
 
-// clang 3.4
 #if CLANG_VERSION == 3
     virtual ASTConsumer *CreateASTConsumer(CompilerInstance &CI, StringRef file) {
         return new PreProcessorASTConsumer(&CI); // pass CI pointer to ASTConsumer
     }
 #else
-// clang 9.0
     std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
                                                    StringRef file) override {
         return llvm::make_unique<PreProcessorASTConsumer>(&CI);
@@ -2038,28 +2033,21 @@ int main(int argc, const char **argv) {
     struct timeval timeStart;
     gettimeofday(&timeStart,NULL);
 
-    // parse the command-line args passed to your code
-// clang 3.4
 #if CLANG_VERSION == 3
     CommonOptionsParser op(argc, argv);
 #else
-    // clang 9.0
     CommonOptionsParser op(argc, argv, TCGCategory);
 #endif
-    // create a new Clang Tool instance (a LibTooling environment)
     ClangTool Tool(op.getCompilations(), op.getSourcePathList());
 
-    // run the Clang Tool, creating a new FrontendAction
     int result;
     vector<string> sourcePathList;
-// clang 3.4
 #if CLANG_VERSION == 3
     result = Tool.run(newFrontendActionFactory<PreProcessorFrontendAction>());
     sourcePathList.push_back(preprocessedPathString);
     ClangTool Tool2(op.getCompilations(), sourcePathList);
     result = Tool2.run(newFrontendActionFactory<KappaGenerateFrontendAction>());
 #else
-// clang 9.0
     result = Tool.run(newFrontendActionFactory<PreProcessorFrontendAction>().get());
     sourcePathList.push_back(preprocessedPathString);
     ClangTool Tool2(op.getCompilations(), sourcePathList);
@@ -2073,21 +2061,19 @@ int main(int argc, const char **argv) {
     rawPath = rawPath.parent_path();
     rawPath /= resultDirStr;
 
-    string kleeIncludeDir = KleeIncludePath==""?"":"-I "+KleeIncludePath+" ";
+    string kleeIncludeDir = (KleeIncludePath=="")?"":"-I "+KleeIncludePath+" ";
 #if CLANG_VERSION == 3
     string IgnorePrintfStr = "";
+    string noInterpolationStr = NoInterpolation?"-no-interpolation ":"";
 #else
     string IgnorePrintfStr = IgnorePrintf?"-ignore-printf ":"";
 #endif
 
     // 编译生成的代码，然后使用klee符号执行
-    if (runKlee) {
+    if (runKlee && (conditionCoverageOutput || decisionCoverageOutput || CDCOutput || MCCOutput || MCDCOutput)) {
         string emitAllErrorsStr = EmitAllErrors?"-emit-all-errors ":"";
         // Kappa生成策略为在同一个文件中生成所有decision的Kappa时，需要-emit-all-errors-in-same-path参数保证路径触发断言后不会停止
         string emitAllErrorsInSamePathStr = (KappaMode == KappaGeneratePolicy::All)?"-emit-all-errors-in-same-path ":"";
-#if CLANG_VERSION == 3
-        string noInterpolationStr = NoInterpolation?"-no-interpolation ":"";
-#endif
         string shellScriptStr =
                 "cd "+rawPath.string()+"\n"
                 "for mode in `ls -1 | grep "+KappaSubDirNameStr+"`; \n"
@@ -2112,7 +2098,7 @@ int main(int argc, const char **argv) {
     }
 
     if (statementCoverageOutput) {
-        fs::path statementOutputPath = rawPath / "statement";
+        fs::path statementOutputPath = rawPath / "Statement";
         string shellScriptStr =
                 "cd "+statementOutputPath.string()+"\n"
                 "for sourceFile in `ls -v *.c`;\n"
@@ -2129,7 +2115,7 @@ int main(int argc, const char **argv) {
     }
 
     if (pathCoverageOutput) {
-        fs::path statementOutputPath = rawPath / "path";
+        fs::path statementOutputPath = rawPath / "Path";
         string shellScriptStr =
                 "cd "+statementOutputPath.string()+"\n"
                 "for sourceFile in `ls -v *.c`;\n"
@@ -2148,152 +2134,155 @@ int main(int argc, const char **argv) {
     struct timeval timeKleeEnd;
     gettimeofday(&timeKleeEnd,NULL);
 
-    vector<map<unsigned int, fs::path> > validTestCase;
-    for (unsigned int i=0; i<conditionTextList.size(); i++) {
-        validTestCase.push_back(map<unsigned int, fs::path>());
-    }
-    map<unsigned int, fs::path> switchTestCaseFile;
+    string coverageMessage;
+    if (conditionCoverageOutput || decisionCoverageOutput || CDCOutput || MCCOutput || MCDCOutput) {
+        vector<map<unsigned int, fs::path> > validTestCase;
+        for (unsigned int i=0; i<conditionTextList.size(); i++) {
+            validTestCase.push_back(map<unsigned int, fs::path>());
+        }
+        map<unsigned int, fs::path> switchTestCaseFile;
+
 #if CLANG_VERSION == 3
-    boost::regex seqIdxReg("Error: ASSERTION FAIL: __kappa__(.+)__ \\^ __expect__(.+)__(.+)__(.+)__ & __SCMask__(.+)__(.+)__(.+)__");
-    boost::regex switchSeqIdxReg("Error: ASSERTION FAIL: (.+)\\*0");
-    string fileSuffix = ".assert.err";
+        boost::regex seqIdxReg("Error: ASSERTION FAIL: __kappa__(.+)__ \\^ __expect__(.+)__(.+)__(.+)__ & __SCMask__(.+)__(.+)__(.+)__");
+        boost::regex switchSeqIdxReg("Error: ASSERTION FAIL: (.+)\\*0");
+        string fileSuffix = ".assert.err";
 #else
-    boost::regex seqIdxReg("Error: TRIGGER: __kappa__(.+)__ \\^ __expect__(.+)__(.+)__(.+)__ & __SCMask__(.+)__(.+)__(.+)__");
-    boost::regex switchSeqIdxReg("Error: TRIGGER: (.+)\\*0");
-    string fileSuffix = ".trigger.err";
+        boost::regex seqIdxReg("Error: TRIGGER: __kappa__(.+)__ \\^ __expect__(.+)__(.+)__(.+)__ & __SCMask__(.+)__(.+)__(.+)__");
+        boost::regex switchSeqIdxReg("Error: TRIGGER: (.+)\\*0");
+        string fileSuffix = ".trigger.err";
 #endif
 
-    // 分析符号执行的结果，提取出其中需要的测试用例组成测试用例集
-    fs::path MCCResultPath = rawPath;
-    MCCResultPath /= KappaSubDirNameStr;
-    fs::directory_iterator end_iter;
-    for (fs::directory_iterator iter(MCCResultPath); iter!=end_iter; iter++) {
-        if (!fs::is_directory(iter->status())) continue;
-        fs::path kleeOutputDir = iter->path();
-        // 寻找klee输出结果文件夹
-        if (kleeOutputDir.leaf().string().find("klee-out-") == string::npos) continue;
-        for (fs::directory_iterator iter(kleeOutputDir); iter!=end_iter; iter++) {
-            if (!fs::is_regular_file(iter->status())) continue;
-            fs::path testCaseInfo = iter->path();
-            string testCaseInfoPathString = testCaseInfo.leaf().string();
-            // 寻找由于断言错误产生的测试用例
-            if (testCaseInfoPathString.find(fileSuffix) == string::npos) continue;
-            std::ifstream ifs(testCaseInfo.string());
-            string testCaseInfoStr;
-            getline(ifs, testCaseInfoStr);
+        // 分析符号执行的结果，提取出其中需要的测试用例组成测试用例集
+        fs::path MCCResultPath = rawPath;
+        MCCResultPath /= KappaSubDirNameStr;
+        fs::directory_iterator end_iter;
+        for (fs::directory_iterator iter(MCCResultPath); iter!=end_iter; iter++) {
+            if (!fs::is_directory(iter->status())) continue;
+            fs::path kleeOutputDir = iter->path();
+            // 寻找klee输出结果文件夹
+            if (kleeOutputDir.leaf().string().find("klee-out-") == string::npos) continue;
+            for (fs::directory_iterator iter(kleeOutputDir); iter!=end_iter; iter++) {
+                if (!fs::is_regular_file(iter->status())) continue;
+                fs::path testCaseInfo = iter->path();
+                string testCaseInfoPathString = testCaseInfo.leaf().string();
+                // 寻找由于断言错误产生的测试用例
+                if (testCaseInfoPathString.find(fileSuffix) == string::npos) continue;
+                std::ifstream ifs(testCaseInfo.string());
+                string testCaseInfoStr;
+                getline(ifs, testCaseInfoStr);
 
-            boost::sregex_token_iterator endIter;
+                boost::sregex_token_iterator endIter;
 
-            // switch测试用例
-            boost::sregex_token_iterator switchIdxIter(
-                    testCaseInfoStr.cbegin(), testCaseInfoStr.cend(), switchSeqIdxReg, 1);
-            if (switchIdxIter != endIter) {
-                fs::path testCasePath = kleeOutputDir;
-                testCasePath /= testCaseInfoPathString.substr(0, testCaseInfoPathString.rfind(fileSuffix))+".ktest";
-                string switchIdxStr = *switchIdxIter;
-                int switchIdx = atoi(switchIdxStr.c_str());
-                switchTestCaseFile.insert(make_pair(switchIdx, testCasePath));
-                SwitchGen++;
-                continue;
-            }
+                // switch测试用例
+                boost::sregex_token_iterator switchIdxIter(
+                        testCaseInfoStr.cbegin(), testCaseInfoStr.cend(), switchSeqIdxReg, 1);
+                if (switchIdxIter != endIter) {
+                    fs::path testCasePath = kleeOutputDir;
+                    testCasePath /= testCaseInfoPathString.substr(0, testCaseInfoPathString.rfind(fileSuffix))+".ktest";
+                    string switchIdxStr = *switchIdxIter;
+                    int switchIdx = atoi(switchIdxStr.c_str());
+                    switchTestCaseFile.insert(make_pair(switchIdx, testCasePath));
+                    SwitchGen++;
+                    continue;
+                }
 
-            // if/for/while/do测试用例
-            boost::sregex_token_iterator decisionIdxIter(
-                    testCaseInfoStr.cbegin(), testCaseInfoStr.cend(), seqIdxReg, 1);
-            boost::sregex_token_iterator seqIdxIter(
-                    testCaseInfoStr.cbegin(), testCaseInfoStr.cend(), seqIdxReg, 4);
-            if (seqIdxIter != endIter) {
-                fs::path testCasePath = kleeOutputDir;
-                testCasePath /= testCaseInfoPathString.substr(0, testCaseInfoPathString.rfind(fileSuffix))+".ktest";
-                string decisionIdxStr = *decisionIdxIter;
-                string seqIdxStr = *seqIdxIter;
-                int decisionIdx = atoi(decisionIdxStr.c_str());
-                int seqIdx = atoi(seqIdxStr.c_str());
-                validTestCase.at(decisionIdx).insert(make_pair(seqIdx, testCasePath));
+                // if/for/while/do测试用例
+                boost::sregex_token_iterator decisionIdxIter(
+                        testCaseInfoStr.cbegin(), testCaseInfoStr.cend(), seqIdxReg, 1);
+                boost::sregex_token_iterator seqIdxIter(
+                        testCaseInfoStr.cbegin(), testCaseInfoStr.cend(), seqIdxReg, 4);
+                if (seqIdxIter != endIter) {
+                    fs::path testCasePath = kleeOutputDir;
+                    testCasePath /= testCaseInfoPathString.substr(0, testCaseInfoPathString.rfind(fileSuffix))+".ktest";
+                    string decisionIdxStr = *decisionIdxIter;
+                    string seqIdxStr = *seqIdxIter;
+                    int decisionIdx = atoi(decisionIdxStr.c_str());
+                    int seqIdx = atoi(seqIdxStr.c_str());
+                    validTestCase.at(decisionIdx).insert(make_pair(seqIdx, testCasePath));
+                }
             }
         }
-    }
 
-    // 通过TestCaseSelector类计算符合覆盖率的测试用例集
-    vector<TestCaseSelector> testCaseSelectorList;
-    for (unsigned int i=0; i<validTestCase.size(); i++) {
-        vector<pair<long long, long long> > trueTestCase, falseTestCase;
-        vector<string> testCaseFileNameList;
-        for (pair<unsigned int, fs::path> testCase : validTestCase.at(i)) {
-            if (trueSeqNum2ExpectList.at(i).count(testCase.first))
-                trueTestCase.push_back(trueSeqNum2ExpectList.at(i).at(testCase.first));
-            else
-                falseTestCase.push_back(falseSeqNum2ExpectList.at(i).at(testCase.first));
+        // 通过TestCaseSelector类计算符合覆盖率的测试用例集
+        vector<TestCaseSelector> testCaseSelectorList;
+        for (unsigned int i=0; i<validTestCase.size(); i++) {
+            vector<pair<long long, long long> > trueTestCase, falseTestCase;
+            vector<string> testCaseFileNameList;
+            for (pair<unsigned int, fs::path> testCase : validTestCase.at(i)) {
+                if (trueSeqNum2ExpectList.at(i).count(testCase.first))
+                    trueTestCase.push_back(trueSeqNum2ExpectList.at(i).at(testCase.first));
+                else
+                    falseTestCase.push_back(falseSeqNum2ExpectList.at(i).at(testCase.first));
 
-            fs::path testCaseFile = testCase.second;
-            if (fs::is_regular_file(testCaseFile)) {
-                string destFileName = testCaseFile.leaf().string();
-                string parentDirName = testCaseFile.parent_path().leaf().string();
-                string ktestFilePrefix = "test";
-                string kleeOutputDirPrefix = "klee-out-";
-                destFileName.insert(ktestFilePrefix.length(), "_"+parentDirName.substr(kleeOutputDirPrefix.length(), string::npos)+"_");
-                testCaseFileNameList.push_back(destFileName);
+                fs::path testCaseFile = testCase.second;
+                if (fs::is_regular_file(testCaseFile)) {
+                    string destFileName = testCaseFile.leaf().string();
+                    string parentDirName = testCaseFile.parent_path().leaf().string();
+                    string ktestFilePrefix = "test";
+                    string kleeOutputDirPrefix = "klee-out-";
+                    destFileName.insert(ktestFilePrefix.length(), "_"+parentDirName.substr(kleeOutputDirPrefix.length(), string::npos)+"_");
+                    testCaseFileNameList.push_back(destFileName);
+                }
+                else testCaseFileNameList.push_back("");
             }
-            else testCaseFileNameList.push_back("");
+
+            TestCaseSelector testCaseSelector(trueTestCase, falseTestCase, conditionTextList.at(i), decisionTextList.at(i), testCaseFileNameList, expect2SeqNumList.at(i).size());
+            testCaseSelectorList.push_back(testCaseSelector);
         }
 
-        TestCaseSelector testCaseSelector(trueTestCase, falseTestCase, conditionTextList.at(i), decisionTextList.at(i), testCaseFileNameList, expect2SeqNumList.at(i).size());
-        testCaseSelectorList.push_back(testCaseSelector);
-    }
-
-    string coverageMessage;
-    llvm::errs() << "Result :\n";
-    // 根据选择的测试用例将对应的ktest文件复制到输出目录
-    if (decisionCoverageOutput) {
-        vector<fs::path> testCaseFiles = selectCoverageTestCase(testCaseSelectorList, switchTestCaseFile, validTestCase, "decision");
-        fs::path outputPath = rawPath / "Decision";
-        copyTestCaseFiles(testCaseFiles, outputPath);
-        string decisionCoverageStr = formatDoubleValue((double)decisionGen*100/decisionAll, 2);
-        llvm::errs() << "Decision Coverage : " << decisionCoverageStr << "%\n";
-        coverageMessage += "Decision Coverage : "+decisionCoverageStr+"%\n";
-    }
-    if (conditionCoverageOutput) {
-        vector<fs::path> testCaseFiles = selectCoverageTestCase(testCaseSelectorList, switchTestCaseFile, validTestCase, "condition");
-        fs::path outputPath = rawPath / "Condition";
-        copyTestCaseFiles(testCaseFiles, outputPath);
-        string conditionCoverageStr = formatDoubleValue((double)conditionGen*100/conditionAll, 2);
-        llvm::errs() << "Condition Coverage : " << conditionCoverageStr << "%\n";
-        coverageMessage += "Condition Coverage : "+conditionCoverageStr+"%\n";
-    }
-    if (CDCOutput) {
-        vector<fs::path> testCaseFiles = selectCoverageTestCase(testCaseSelectorList, switchTestCaseFile, validTestCase, "CDC");
-        fs::path outputPath = rawPath / "CDC";
-        copyTestCaseFiles(testCaseFiles, outputPath);
-        string CDCStr = formatDoubleValue((double)CDCGen*100/CDCAll, 2);
-        llvm::errs() << "CDC : " << CDCStr << "%\n";
-        coverageMessage += "CDC : "+CDCStr+"%\n";
-    }
-    if (MCDCOutput) {
-        vector<fs::path> testCaseFiles = selectCoverageTestCase(testCaseSelectorList, switchTestCaseFile, validTestCase, "MCDC");
-        fs::path outputPath = rawPath / "MCDC";
-        copyTestCaseFiles(testCaseFiles, outputPath);
-        string MCDCStr = formatDoubleValue((double)MCDCGen*100/MCDCAll, 2);
-        llvm::errs() << "MCDC : " << MCDCStr << "%\n";
-        coverageMessage += "MCDC : "+MCDCStr+"%\n";
-    }
-    if (MCCOutput) {
-        vector<fs::path> testCaseFiles;
-        for (map<unsigned int, fs::path> validTestCaseEachDecision : validTestCase)
-            for (pair<unsigned int, fs::path> item : validTestCaseEachDecision)
+        llvm::errs() << "Result :\n";
+        // 根据选择的测试用例将对应的ktest文件复制到输出目录
+        if (decisionCoverageOutput) {
+            vector<fs::path> testCaseFiles = selectCoverageTestCase(testCaseSelectorList, switchTestCaseFile, validTestCase, "decision");
+            fs::path outputPath = rawPath / "Decision";
+            copyTestCaseFiles(testCaseFiles, outputPath);
+            string decisionCoverageStr = formatDoubleValue((double)decisionGen*100/decisionAll, 2);
+            llvm::errs() << "Decision Coverage : " << decisionCoverageStr << "%\n";
+            coverageMessage += "Decision Coverage : "+decisionCoverageStr+"%\n";
+        }
+        if (conditionCoverageOutput) {
+            vector<fs::path> testCaseFiles = selectCoverageTestCase(testCaseSelectorList, switchTestCaseFile, validTestCase, "condition");
+            fs::path outputPath = rawPath / "Condition";
+            copyTestCaseFiles(testCaseFiles, outputPath);
+            string conditionCoverageStr = formatDoubleValue((double)conditionGen*100/conditionAll, 2);
+            llvm::errs() << "Condition Coverage : " << conditionCoverageStr << "%\n";
+            coverageMessage += "Condition Coverage : "+conditionCoverageStr+"%\n";
+        }
+        if (CDCOutput) {
+            vector<fs::path> testCaseFiles = selectCoverageTestCase(testCaseSelectorList, switchTestCaseFile, validTestCase, "CDC");
+            fs::path outputPath = rawPath / "CDC";
+            copyTestCaseFiles(testCaseFiles, outputPath);
+            string CDCStr = formatDoubleValue((double)CDCGen*100/CDCAll, 2);
+            llvm::errs() << "CDC : " << CDCStr << "%\n";
+            coverageMessage += "CDC : "+CDCStr+"%\n";
+        }
+        if (MCDCOutput) {
+            vector<fs::path> testCaseFiles = selectCoverageTestCase(testCaseSelectorList, switchTestCaseFile, validTestCase, "MCDC");
+            fs::path outputPath = rawPath / "MCDC";
+            copyTestCaseFiles(testCaseFiles, outputPath);
+            string MCDCStr = formatDoubleValue((double)MCDCGen*100/MCDCAll, 2);
+            llvm::errs() << "MCDC : " << MCDCStr << "%\n";
+            coverageMessage += "MCDC : "+MCDCStr+"%\n";
+        }
+        if (MCCOutput) {
+            vector<fs::path> testCaseFiles;
+            for (map<unsigned int, fs::path> validTestCaseEachDecision : validTestCase)
+                for (pair<unsigned int, fs::path> item : validTestCaseEachDecision)
+                    testCaseFiles.push_back(item.second);
+            for (pair<unsigned int, fs::path> item : switchTestCaseFile)
                 testCaseFiles.push_back(item.second);
-        for (pair<unsigned int, fs::path> item : switchTestCaseFile)
-            testCaseFiles.push_back(item.second);
 
-        fs::path outputPath = rawPath / "MCC";
-        copyTestCaseFiles(testCaseFiles, outputPath);
-        string MCCStr = formatDoubleValue((double)MCCGen*100/MCCAll, 2);
-        llvm::errs() << "MCC : " << MCCStr << "%\n";
-        coverageMessage += "MCC : "+MCCStr+"%\n";
-    }
-    if (SwitchAll != 0) {
-        string SwitchStr = formatDoubleValue((double)SwitchGen*100/SwitchAll, 2);
-        llvm::errs() << "Switch : " << SwitchStr << "%\n";
-        coverageMessage += "Switch : "+SwitchStr+"%\n";
+            fs::path outputPath = rawPath / "MCC";
+            copyTestCaseFiles(testCaseFiles, outputPath);
+            string MCCStr = formatDoubleValue((double)MCCGen*100/MCCAll, 2);
+            llvm::errs() << "MCC : " << MCCStr << "%\n";
+            coverageMessage += "MCC : "+MCCStr+"%\n";
+        }
+        if (SwitchAll != 0) {
+            string SwitchStr = formatDoubleValue((double)SwitchGen*100/SwitchAll, 2);
+            llvm::errs() << "Switch : " << SwitchStr << "%\n";
+            coverageMessage += "Switch : "+SwitchStr+"%\n";
+        }
     }
 
     struct timeval timeAllEnd;
@@ -2315,5 +2304,5 @@ int main(int argc, const char **argv) {
     fOut << messageStr << "\n\n";
     fOut.close();
 
-    return result;
+    return 0;
 }
