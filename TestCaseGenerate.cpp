@@ -80,6 +80,8 @@ set<VarDecl*> externVariables;
 // buffer数组的最大长度
 #define MAX_BUFFER_SIZE 2048
 
+string KappaSubDirNameStr = "kappa";
+
 
 // 表示操作符类型，其中not可与其他操作符混用，表示对运作结果做非运算
 // 0b1000
@@ -104,9 +106,6 @@ cl::opt<bool> pathCoverageOutput("path", cl::desc("create path coverage output f
 cl::opt<bool> addInclude("addI", cl::desc("add klee include at the start of the file"), cl::init(true));
 cl::opt<bool> addDriverFunc("addD", cl::desc("add parameter definition, klee symbolic definition and function call at the start of main function"), cl::init(true));
 cl::opt<string> targetFuncName("func", cl::desc("function to be tested"), cl::init("main"));
-cl::opt<bool> genA("genA", cl::desc("generate all sequences in one file"), cl::init(false));
-cl::opt<bool> genD("genD", cl::desc("generate each decision one file"), cl::init(false));
-cl::opt<bool> genS("genS", cl::desc("generate each sequence one file"), cl::init(false));
 cl::opt<bool> runKlee("runKlee", cl::desc("run klee after source2source transform"), cl::init(true));
 cl::opt<bool> DEBUG("DEBUG", cl::desc("output debug message"), cl::init(false));
 cl::opt<bool> EmitAllErrors("emit-all-errors", cl::desc("generate tests cases for all errors"), cl::init(false));
@@ -140,6 +139,27 @@ cl::opt<SearchPolicy> SearchMode(
         ),
 #endif
         cl::init(SearchPolicy::Auto));
+
+enum class KappaGeneratePolicy {
+    All,
+    Decision,
+    Sequence,
+};
+
+cl::opt<KappaGeneratePolicy> KappaMode(
+        "kappa-mode",
+        cl::desc("Specify the Kappa generate policy"),
+        cl::values(
+                clEnumValN(KappaGeneratePolicy::All, "a", "generate all sequences in one file"),
+                clEnumValN(KappaGeneratePolicy::Decision, "d", "generate each decision one file"),
+                clEnumValN(KappaGeneratePolicy::Sequence, "s", "generate each sequence one file")
+#if CLANG_VERSION == 3
+                ,clEnumValEnd),
+#else
+        ),
+#endif
+        cl::init(KappaGeneratePolicy::Decision));
+
 
 // 将src中的全部内容添加到dest中
 void addAll(vector<pair<long long, long long> > &dest, vector<pair<long long, long long> > &src) {
@@ -760,10 +780,10 @@ public:
         }
 
         if (MCCOutput) MCCTestCases = allCases;
-        if (decisionCoverageOutput) decisionTestCases = calculateDecision();
-        if (conditionCoverageOutput) conditionTestCases = calculateCondition();
-        if (CDCOutput) CDCTestCases = calculateCDC();
-        if (MCDCOutput) MCDCTestCases = calculateMCDC();
+        if (decisionCoverageOutput && !testCaseFileNameList.empty()) decisionTestCases = calculateDecision();
+        if (conditionCoverageOutput && !testCaseFileNameList.empty()) conditionTestCases = calculateCondition();
+        if (CDCOutput && !testCaseFileNameList.empty()) CDCTestCases = calculateCDC();
+        if (MCDCOutput && !testCaseFileNameList.empty()) MCDCTestCases = calculateMCDC();
 
         llvm::errs() << "\n";
         if (!testCaseFileNameList.empty())
@@ -1187,12 +1207,7 @@ private:
         fs::path rawPath(pathString);
         fs::path fileDir = rawPath.parent_path();
         fileDir /= resultDirStr;
-        switch (mode) {
-            case MODE_DEC: fileDir /= "DEC_"+coverage; break;
-            case MODE_SEQ: fileDir /= "SEQ_"+coverage; break;
-            case MODE_ALL: fileDir /= "ALL_"+coverage; break;
-            default: fileDir /= coverage;
-        }
+        fileDir /= KappaSubDirNameStr;
 
         string fileName = rawPath.filename().string();
         if (mode == MODE_DEC || mode == MODE_SEQ) fileName.insert(fileName.rfind('.'), "_"+to_string(count));
@@ -1374,7 +1389,7 @@ public:
 };
 
 
-shared_ptr<RewriterWrapper> ARewriterWrapper, DRewriterWrapper, SRewriterWrapper;
+shared_ptr<RewriterWrapper> rewriterWrapper;
 
 
 // 消去字符串中的特定字符
@@ -1593,17 +1608,17 @@ private:
         shared_ptr<LogicExpressionTree> leTree = make_shared<LogicExpressionTree>(decision);
         map<pair<long long, long long>, unsigned int> expect2SeqNum = leTree->getSeqNumMap();
 
-        if (genA) {
-            ARewriterWrapper->editRewriter(decision, leTree->conditions, leTree->MCCExpect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
+        if (KappaMode == KappaGeneratePolicy::All) {
+            rewriterWrapper->editRewriter(decision, leTree->conditions, leTree->MCCExpect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
         }
-        if (genD) {
-            DRewriterWrapper->editRewriter(decision, leTree->conditions, leTree->MCCExpect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
-            DRewriterWrapper->writeResult();
+        else if (KappaMode == KappaGeneratePolicy::Decision) {
+            rewriterWrapper->editRewriter(decision, leTree->conditions, leTree->MCCExpect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
+            rewriterWrapper->writeResult();
         }
-        if (genS) {
+        else if (KappaMode == KappaGeneratePolicy::Sequence) {
             for (pair<long long, long long> expect : leTree->MCCExpect) {
-                SRewriterWrapper->editRewriter(decision, leTree->conditions, expect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
-                SRewriterWrapper->writeResult();
+                rewriterWrapper->editRewriter(decision, leTree->conditions, expect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
+                rewriterWrapper->writeResult();
             }
         }
     }
@@ -1627,14 +1642,14 @@ private:
             sprintf(buffer, switchMatchFmtLast, switchCount++);
             SwitchAll++;
         }
-        if (genA) {
-            ARewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
+        if (KappaMode == KappaGeneratePolicy::All) {
+            rewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
         }
-        if (genD) {
-            DRewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
+        else if (KappaMode == KappaGeneratePolicy::Decision) {
+            rewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
         }
-        if (genS) {
-            SRewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
+        else if (KappaMode == KappaGeneratePolicy::Sequence) {
+            rewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
         }
         switchCase = switchCase->getNextSwitchCase();
         while (NULL != switchCase) {
@@ -1647,22 +1662,19 @@ private:
             }
             else sprintf(buffer, switchMatchFmtLast, switchCount++);
             SwitchAll++;
-            if (genA) {
-                ARewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
+            if (KappaMode == KappaGeneratePolicy::All) {
+                rewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
             }
-            if (genD) {
-                DRewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
+            else if (KappaMode == KappaGeneratePolicy::Decision) {
+                rewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
             }
-            if (genS) {
-                SRewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
+            else if (KappaMode == KappaGeneratePolicy::Sequence) {
+                rewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
             }
             switchCase = switchCase->getNextSwitchCase();
         }
-        if (genD) {
-            DRewriterWrapper->writeResult();
-        }
-        if (genS) {
-            SRewriterWrapper->writeResult();
+        if (KappaMode == KappaGeneratePolicy::Decision || KappaMode == KappaGeneratePolicy::Sequence) {
+            rewriterWrapper->writeResult();
         }
     }
 
@@ -1672,9 +1684,15 @@ public:
     {
         sourceCode.setSourceMgr(astContext->getSourceManager(), astContext->getLangOpts());
 
-        ARewriterWrapper = make_shared<RewriterWrapper>(astContext, MODE_ALL, "MCC");
-        DRewriterWrapper = make_shared<RewriterWrapper>(astContext, MODE_DEC, "MCC");
-        SRewriterWrapper = make_shared<RewriterWrapper>(astContext, MODE_SEQ, "MCC");
+        if (KappaMode == KappaGeneratePolicy::All) {
+            rewriterWrapper = make_shared<RewriterWrapper>(astContext, MODE_ALL, "MCC");
+        }
+        else if (KappaMode == KappaGeneratePolicy::Decision) {
+            rewriterWrapper = make_shared<RewriterWrapper>(astContext, MODE_DEC, "MCC");
+        }
+        else if (KappaMode == KappaGeneratePolicy::Sequence) {
+            rewriterWrapper = make_shared<RewriterWrapper>(astContext, MODE_SEQ, "MCC");
+        }
 
         printingPolicy.Bool = 1;
         printingPolicy.ConstantArraySizeAsWritten = 1;
@@ -1776,10 +1794,7 @@ private:
         fs::path rawPath(pathString);
         resultDirStr = "result-" + rawPath.leaf().string();
         resetSingleDir(pathString, "", true);
-        resetSingleDir(pathString, "ALL_MCC", genA && MCCOutput);
-        resetSingleDir(pathString, "DEC_MCC", genD && MCCOutput);
-        resetSingleDir(pathString, "SEQ_MCC", genS && MCCOutput);
-        resetSingleDir(pathString, "postGen", true);
+        resetSingleDir(pathString, KappaSubDirNameStr, true);
         resetSingleDir(pathString, "statement", statementCoverageOutput);
         resetSingleDir(pathString, "path", pathCoverageOutput);
     }
@@ -1875,8 +1890,8 @@ public:
     KappaGenerateFrontendAction() { }
 
     void EndSourceFileAction() override {
-        if (genA) {
-            ARewriterWrapper->writeResult();
+        if (KappaMode == KappaGeneratePolicy::All) {
+            rewriterWrapper->writeResult();
         }
     }
 
@@ -2034,13 +2049,6 @@ int main(int argc, const char **argv) {
     // create a new Clang Tool instance (a LibTooling environment)
     ClangTool Tool(op.getCompilations(), op.getSourcePathList());
 
-    if (genA) {
-        genD = false;
-        genS = false;
-    }
-    else if (genD) genS = false;
-    else if (!genS) genD = true;
-
     // run the Clang Tool, creating a new FrontendAction
     int result;
     vector<string> sourcePathList;
@@ -2074,19 +2082,15 @@ int main(int argc, const char **argv) {
 
     // 编译生成的代码，然后使用klee符号执行
     if (runKlee) {
-        string grepStr;
-        if (genA) grepStr = " | grep ALL";
-        else if (genD) grepStr = " | grep DEC";
-        else if (genS) grepStr = " | grep SEQ";
-        else grepStr = " | grep -v 'statement\\|path'";
         string emitAllErrorsStr = EmitAllErrors?"-emit-all-errors ":"";
-        string emitAllErrorsInSamePathStr = genA?"-emit-all-errors-in-same-path ":"";
+        // Kappa生成策略为在同一个文件中生成所有decision的Kappa时，需要-emit-all-errors-in-same-path参数保证路径触发断言后不会停止
+        string emitAllErrorsInSamePathStr = (KappaMode == KappaGeneratePolicy::All)?"-emit-all-errors-in-same-path ":"";
 #if CLANG_VERSION == 3
         string noInterpolationStr = NoInterpolation?"-no-interpolation ":"";
 #endif
         string shellScriptStr =
                 "cd "+rawPath.string()+"\n"
-                "for mode in `ls -1"+grepStr+"`; \n"
+                "for mode in `ls -1 | grep "+KappaSubDirNameStr+"`; \n"
                 "do   \n"
                 "    if [ -d \"$mode\" ]; then\n"
                 "        cd $mode\n"
@@ -2161,9 +2165,7 @@ int main(int argc, const char **argv) {
 
     // 分析符号执行的结果，提取出其中需要的测试用例组成测试用例集
     fs::path MCCResultPath = rawPath;
-    if (genA) MCCResultPath /= "ALL_MCC";
-    else if (genD) MCCResultPath /= "DEC_MCC";
-    else if (genS) MCCResultPath /= "SEQ_MCC";
+    MCCResultPath /= KappaSubDirNameStr;
     fs::directory_iterator end_iter;
     for (fs::directory_iterator iter(MCCResultPath); iter!=end_iter; iter++) {
         if (!fs::is_directory(iter->status())) continue;
@@ -2244,7 +2246,7 @@ int main(int argc, const char **argv) {
     // 根据选择的测试用例将对应的ktest文件复制到输出目录
     if (decisionCoverageOutput) {
         vector<fs::path> testCaseFiles = selectCoverageTestCase(testCaseSelectorList, switchTestCaseFile, validTestCase, "decision");
-        fs::path outputPath = rawPath / "postGen" / "Decision";
+        fs::path outputPath = rawPath / "Decision";
         copyTestCaseFiles(testCaseFiles, outputPath);
         string decisionCoverageStr = formatDoubleValue((double)decisionGen*100/decisionAll, 2);
         llvm::errs() << "Decision Coverage : " << decisionCoverageStr << "%\n";
@@ -2252,7 +2254,7 @@ int main(int argc, const char **argv) {
     }
     if (conditionCoverageOutput) {
         vector<fs::path> testCaseFiles = selectCoverageTestCase(testCaseSelectorList, switchTestCaseFile, validTestCase, "condition");
-        fs::path outputPath = rawPath / "postGen" / "Condition";
+        fs::path outputPath = rawPath / "Condition";
         copyTestCaseFiles(testCaseFiles, outputPath);
         string conditionCoverageStr = formatDoubleValue((double)conditionGen*100/conditionAll, 2);
         llvm::errs() << "Condition Coverage : " << conditionCoverageStr << "%\n";
@@ -2260,7 +2262,7 @@ int main(int argc, const char **argv) {
     }
     if (CDCOutput) {
         vector<fs::path> testCaseFiles = selectCoverageTestCase(testCaseSelectorList, switchTestCaseFile, validTestCase, "CDC");
-        fs::path outputPath = rawPath / "postGen" / "CDC";
+        fs::path outputPath = rawPath / "CDC";
         copyTestCaseFiles(testCaseFiles, outputPath);
         string CDCStr = formatDoubleValue((double)CDCGen*100/CDCAll, 2);
         llvm::errs() << "CDC : " << CDCStr << "%\n";
@@ -2268,7 +2270,7 @@ int main(int argc, const char **argv) {
     }
     if (MCDCOutput) {
         vector<fs::path> testCaseFiles = selectCoverageTestCase(testCaseSelectorList, switchTestCaseFile, validTestCase, "MCDC");
-        fs::path outputPath = rawPath / "postGen" / "MCDC";
+        fs::path outputPath = rawPath / "MCDC";
         copyTestCaseFiles(testCaseFiles, outputPath);
         string MCDCStr = formatDoubleValue((double)MCDCGen*100/MCDCAll, 2);
         llvm::errs() << "MCDC : " << MCDCStr << "%\n";
@@ -2282,7 +2284,7 @@ int main(int argc, const char **argv) {
         for (pair<unsigned int, fs::path> item : switchTestCaseFile)
             testCaseFiles.push_back(item.second);
 
-        fs::path outputPath = rawPath  / "postGen" / "MCC";
+        fs::path outputPath = rawPath / "MCC";
         copyTestCaseFiles(testCaseFiles, outputPath);
         string MCCStr = formatDoubleValue((double)MCCGen*100/MCCAll, 2);
         llvm::errs() << "MCC : " << MCCStr << "%\n";
@@ -2306,7 +2308,7 @@ int main(int argc, const char **argv) {
 
     llvm::errs() << "\n" << totalTimeStr << preKleeTimeStr << kleeTimeStr << postKleeTimeStr << "\n";
 
-    fs::path messageOutPath = rawPath / "postGen" / "message.txt";
+    fs::path messageOutPath = rawPath / "message.txt";
     ofstream fOut(messageOutPath.string());
     fOut << coverageMessage << "\n\n";
     fOut << totalTimeStr << preKleeTimeStr << kleeTimeStr << postKleeTimeStr << "\n\n";
