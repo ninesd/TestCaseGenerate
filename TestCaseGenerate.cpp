@@ -34,9 +34,6 @@ using namespace clang::tooling;
 using namespace llvm;
 namespace fs = boost::filesystem;
 
-// 用于提取未经修改的源代码文本
-Rewriter sourceCode;
-
 // 目标函数相关
 vector<FunctionDecl*> funcDeclList;
 FunctionDecl *targetFuncDecl;
@@ -170,6 +167,41 @@ string formatDoubleValue(double val, int fixed) {
     string str = std::to_string(val);
     return str.substr(0, str.find(".") + fixed + 1);
 }
+
+
+// 继承Rewriter类，添加对宏的处理
+class CustomRewriter final : public Rewriter {
+public:
+    explicit CustomRewriter() = default;
+    explicit CustomRewriter(SourceManager &SM, const LangOptions &LO) : Rewriter(SM, LO) {}
+
+    bool ReplaceText(SourceRange range, StringRef NewStr) {
+        SourceLocation startLoc = range.getBegin();
+        SourceLocation endLoc = range.getEnd();
+
+        if (startLoc.isMacroID()) {
+            startLoc = Rewriter::getSourceMgr().getExpansionLoc(startLoc);
+            range = SourceRange(startLoc, endLoc);
+        }
+
+        return Rewriter::ReplaceText(range, NewStr);
+    }
+
+    string getRewrittenText(SourceRange range) {
+        SourceLocation startLoc = range.getBegin();
+        SourceLocation endLoc = range.getEnd();
+
+        if (startLoc.isMacroID()) {
+            startLoc = Rewriter::getSourceMgr().getExpansionLoc(startLoc);
+            range = SourceRange(startLoc, endLoc);
+        }
+
+        return Rewriter::getRewrittenText(range);
+    }
+};
+
+// 用于提取未经修改的源代码文本
+CustomRewriter sourceCode;
 
 // 从给定的test case序列中选择满足覆盖率的test case集合
 class TestCaseSelector {
@@ -1193,17 +1225,17 @@ const char switchMatchFmtLast[128] = "else klee_trigger_if_false(%d*0);\n";
 #define MODE_NONE -1
 
 // 包装Rewriter类，用于方便地对Rewriter类做添加kappa stmt、将内容写入本地、重置Rewriter内容等操作
-class RewriterWrapper {
+class RewriterController {
 private:
     ASTContext *astContext;
-    shared_ptr<Rewriter> rewriter;
+    shared_ptr<CustomRewriter> rewriter;
     int count;
     int mode;
     string coverage;
     vector<pair<SourceLocation, string>> decisionTextList;
 
     // 将编辑后的内容写入本地
-    void writeNewFile(shared_ptr<Rewriter> rewriter, string pathString, string coverage, int mode=-1, int count=0) {
+    void writeNewFile(shared_ptr<CustomRewriter> rewriter, string pathString, string coverage, int mode=-1, int count=0) {
         fs::path rawPath(pathString);
         fs::path fileDir = rawPath.parent_path();
         fileDir /= resultDirStr;
@@ -1231,7 +1263,7 @@ private:
         std::error_code ErrorInfo;
         llvm::raw_fd_ostream outFile(filePath.c_str(), ErrorInfo);
 #endif
-        rewriter->getEditBuffer(sourceCode.getSourceMgr().getMainFileID()).write(outFile); // --> this will write the result to outFile
+        getEditBuffer(sourceCode.getSourceMgr().getMainFileID()).write(outFile); // --> this will write the result to outFile
         outFile.close();
     }
 
@@ -1241,7 +1273,7 @@ private:
 
         // 添加include文本
         if (addInclude) {
-            rewriter->InsertTextAfter(SM.getLocForStartOfFile(SM.getMainFileID()), kleeInclude);
+            InsertTextAfter(SM.getLocForStartOfFile(SM.getMainFileID()), kleeInclude);
         }
 
         // 添加驱动函数文本
@@ -1251,55 +1283,55 @@ private:
                 if (CompoundStmt *compoundStmt = dyn_cast<CompoundStmt>(mainBody)) {
                     if (!compoundStmt->body_empty()) {
                         Stmt *firstStmt = *(compoundStmt->body_begin());
-                        rewriter->InsertTextAfter(firstStmt->getSourceRange().getBegin(), makeSymbolicStmt);
+                        InsertTextAfter(firstStmt->getSourceRange().getBegin(), makeSymbolicStmt);
                     }
                 }
             }
             else {
                 if (hasMain) {
-                    rewriter->ReplaceText(mainFuncDecl->getBody()->getSourceRange(), " {\n"+makeSymbolicStmt+"    return 0;\n}\n");
+                    ReplaceText(mainFuncDecl->getBody()->getSourceRange(), " {\n"+makeSymbolicStmt+"    return 0;\n}\n");
                 }
                 else {
-                    rewriter->InsertTextAfter(SM.getLocForEndOfFile(SM.getMainFileID()), "int main() {\n"+makeSymbolicStmt+"}\n");
+                    InsertTextAfter(SM.getLocForEndOfFile(SM.getMainFileID()), "int main() {\n"+makeSymbolicStmt+"}\n");
                 }
             }
         }
 
         // 添加tmp变量定义
-        rewriter->InsertTextAfter(targetFuncStartLoc, tmpVarDeclStmt);
+        InsertTextAfter(targetFuncStartLoc, tmpVarDeclStmt);
 
         // 删除extern关键词
         for (VarDecl* externVarDel : externVariables) {
-            string varDeclStr = rewriter->getRewrittenText(externVarDel->getSourceRange());
+            string varDeclStr = getRewrittenText(externVarDel->getSourceRange());
             string::size_type pos = varDeclStr.find("extern ");
             if (pos != string::npos) {
                 varDeclStr.replace(pos, 7, "");
-                rewriter->ReplaceText(externVarDel->getSourceRange(), varDeclStr);
+                ReplaceText(externVarDel->getSourceRange(), varDeclStr);
             }
         }
 
         // 添加原decision注释
         for (pair<SourceLocation, string> decisionText : decisionTextList)
-            rewriter->InsertTextAfter(decisionText.first, decisionText.second);
+            InsertTextAfter(decisionText.first, decisionText.second);
     }
 
     // 重置Rewriter，恢复原始文本
     void resetRewriter() {
-        rewriter = make_shared<Rewriter>();
+        rewriter = make_shared<CustomRewriter>();
         rewriter->setSourceMgr(astContext->getSourceManager(), astContext->getLangOpts());
         decisionTextList.clear();
     }
 
 
 public:
-    RewriterWrapper(ASTContext *astContext, int mode, string coverage) : count(0) {
+    RewriterController(ASTContext *astContext, int mode=MODE_NONE, string coverage="") : count(0) {
         this->mode = mode;
         this->coverage = coverage;
         this->astContext = astContext;
         resetRewriter();
     }
 
-    shared_ptr<Rewriter> getRewriter() { return rewriter; }
+    shared_ptr<CustomRewriter> getRewriter() { return rewriter; }
 
     // 将编辑后的内容写入本地
     void writeResult() {
@@ -1321,7 +1353,7 @@ public:
         for (unsigned int i=0; i<conditions.size(); i++) {
             string conditionString = sourceCode.getRewrittenText(conditions.at(i)->getSourceRange());
             sprintf(buffer, kappaCalcFmt, decisionCount, conditionString.c_str(), i, decisionCount, i);
-            rewriter->ReplaceText(conditions.at(i)->getSourceRange(), buffer);
+            ReplaceText(conditions.at(i)->getSourceRange(), buffer);
         }
 
         // 生成断言语句
@@ -1335,16 +1367,16 @@ public:
         // 替换整个decision
         char kappaRstStmt[MAX_BUFFER_SIZE];
         sprintf(kappaRstStmt, kappaRstFmt, decisionCount);
-        sprintf(buffer, decisionReplaceFmt, kappaRstStmt, rewriter->getRewrittenText(decisionSourceRange).c_str(),
+        sprintf(buffer, decisionReplaceFmt, kappaRstStmt, getRewrittenText(decisionSourceRange).c_str(),
                 kappaMatchStmt.c_str());
-        rewriter->ReplaceText(decisionSourceRange, buffer);
+        ReplaceText(decisionSourceRange, buffer);
 
         // 添加原decision注释
-        rewriter->InsertTextAfter(declLoc, "\n// "+sourceCode.getRewrittenText(decision->getSourceRange())+"\n");
+        InsertTextAfter(declLoc, "\n// "+sourceCode.getRewrittenText(decision->getSourceRange())+"\n");
 
         // 添加kappa定义
         sprintf(buffer, kappaDeclFmt, decisionCount);
-        rewriter->InsertTextAfter(declLoc, buffer);
+        InsertTextAfter(declLoc, buffer);
 
         // 添加expect和SCMask定义
         for (unsigned int i=0; i<expect.size(); i++) {
@@ -1361,13 +1393,13 @@ public:
             valueComment += "|";
             valueComment += i<trueCaseNum?"T":"F";
             valueComment += "\n";
-            rewriter->InsertTextAfter(declLoc, valueComment);
+            InsertTextAfter(declLoc, valueComment);
 
             sprintf(buffer, expectDeclFmt, decisionCount, i, expect2SeqNum[expect.at(i)], expect.at(i).first);
-            rewriter->InsertTextAfter(declLoc, buffer);
+            InsertTextAfter(declLoc, buffer);
 
             sprintf(buffer, SCMaskDeclFmt, decisionCount, i, expect2SeqNum[expect.at(i)], expect.at(i).second);
-            rewriter->InsertTextAfter(declLoc, buffer);
+            InsertTextAfter(declLoc, buffer);
         }
 
         // 添加原decision注释
@@ -1390,10 +1422,18 @@ public:
     void InsertTextAfter(SourceLocation loc, string str) {
         rewriter->InsertTextAfter(loc, str);
     }
+
+    void ReplaceText(SourceRange range, string str) { rewriter->ReplaceText(range, str); }
+
+    string getRewrittenText(SourceRange range) const { return rewriter->getRewrittenText(range); }
+
+    RewriteBuffer &getEditBuffer(FileID FID) { return rewriter->getEditBuffer(FID); }
+
+    SourceManager &getSourceMgr() const { return rewriter->getSourceMgr(); }
 };
 
 
-shared_ptr<RewriterWrapper> rewriterWrapper;
+shared_ptr<RewriterController> rewriterController;
 
 
 // 消去字符串中的特定字符
@@ -1613,16 +1653,16 @@ private:
         map<pair<long long, long long>, unsigned int> expect2SeqNum = leTree->getSeqNumMap();
 
         if (KappaMode == KappaGeneratePolicy::All) {
-            rewriterWrapper->editRewriter(decision, leTree->conditions, leTree->MCCExpect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
+            rewriterController->editRewriter(decision, leTree->conditions, leTree->MCCExpect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
         }
         else if (KappaMode == KappaGeneratePolicy::Decision) {
-            rewriterWrapper->editRewriter(decision, leTree->conditions, leTree->MCCExpect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
-            rewriterWrapper->writeResult();
+            rewriterController->editRewriter(decision, leTree->conditions, leTree->MCCExpect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
+            rewriterController->writeResult();
         }
         else if (KappaMode == KappaGeneratePolicy::Sequence) {
             for (pair<long long, long long> expect : leTree->MCCExpect) {
-                rewriterWrapper->editRewriter(decision, leTree->conditions, expect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
-                rewriterWrapper->writeResult();
+                rewriterController->editRewriter(decision, leTree->conditions, expect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
+                rewriterController->writeResult();
             }
         }
     }
@@ -1647,13 +1687,13 @@ private:
             SwitchAll++;
         }
         if (KappaMode == KappaGeneratePolicy::All) {
-            rewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
+            rewriterController->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
         }
         else if (KappaMode == KappaGeneratePolicy::Decision) {
-            rewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
+            rewriterController->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
         }
         else if (KappaMode == KappaGeneratePolicy::Sequence) {
-            rewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
+            rewriterController->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
         }
         switchCase = switchCase->getNextSwitchCase();
         while (NULL != switchCase) {
@@ -1667,18 +1707,18 @@ private:
             else sprintf(buffer, switchMatchFmtLast, switchCount++);
             SwitchAll++;
             if (KappaMode == KappaGeneratePolicy::All) {
-                rewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
+                rewriterController->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
             }
             else if (KappaMode == KappaGeneratePolicy::Decision) {
-                rewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
+                rewriterController->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
             }
             else if (KappaMode == KappaGeneratePolicy::Sequence) {
-                rewriterWrapper->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
+                rewriterController->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
             }
             switchCase = switchCase->getNextSwitchCase();
         }
         if (KappaMode == KappaGeneratePolicy::Decision || KappaMode == KappaGeneratePolicy::Sequence) {
-            rewriterWrapper->writeResult();
+            rewriterController->writeResult();
         }
     }
 
@@ -1689,13 +1729,13 @@ public:
         sourceCode.setSourceMgr(astContext->getSourceManager(), astContext->getLangOpts());
 
         if (KappaMode == KappaGeneratePolicy::All) {
-            rewriterWrapper = make_shared<RewriterWrapper>(astContext, MODE_ALL, "MCC");
+            rewriterController = make_shared<RewriterController>(astContext, MODE_ALL, "MCC");
         }
         else if (KappaMode == KappaGeneratePolicy::Decision) {
-            rewriterWrapper = make_shared<RewriterWrapper>(astContext, MODE_DEC, "MCC");
+            rewriterController = make_shared<RewriterController>(astContext, MODE_DEC, "MCC");
         }
         else if (KappaMode == KappaGeneratePolicy::Sequence) {
-            rewriterWrapper = make_shared<RewriterWrapper>(astContext, MODE_SEQ, "MCC");
+            rewriterController = make_shared<RewriterController>(astContext, MODE_SEQ, "MCC");
         }
 
         printingPolicy.Bool = 1;
@@ -1874,12 +1914,12 @@ public:
 
         // 生成statement coverage所需源文件
         if (statementCoverageOutput) {
-            RewriterWrapper statementRewriter(&Context, MODE_NONE, "statement");
+            RewriterController statementRewriter(&Context, MODE_NONE, "statement");
             statementRewriter.writeResult();
         }
         // 生成path coverage所需源文件
         if (pathCoverageOutput) {
-            RewriterWrapper pathRewriter(&Context, MODE_NONE, "path");
+            RewriterController pathRewriter(&Context, MODE_NONE, "path");
             pathRewriter.writeResult();
         }
     }
@@ -1892,7 +1932,7 @@ public:
 
     void EndSourceFileAction() override {
         if (KappaMode == KappaGeneratePolicy::All) {
-            rewriterWrapper->writeResult();
+            rewriterController->writeResult();
         }
     }
 
@@ -1908,8 +1948,7 @@ public:
 #endif
 };
 
-
-shared_ptr<Rewriter> preProcessorRewriter;
+shared_ptr<RewriterController> preProcessorRewriterController;
 
 // 添加必要的括号
 class PreProcessorVisitor : public RecursiveASTVisitor<PreProcessorVisitor> {
@@ -1919,14 +1958,13 @@ private:
 public:
     explicit PreProcessorVisitor(CompilerInstance *CI)
             : astContext(&(CI->getASTContext())) {
-        preProcessorRewriter = make_shared<Rewriter>();
-        preProcessorRewriter->setSourceMgr(astContext->getSourceManager(), astContext->getLangOpts());
+        preProcessorRewriterController = make_shared<RewriterController>(astContext);
     }
 
     virtual bool VisitStmt(Stmt *st) {
         if (IfStmt *ifStmt = dyn_cast<IfStmt>(st)) {
             Expr * expr = ifStmt->getCond();
-            preProcessorRewriter->ReplaceText(expr->getSourceRange(), "("+preProcessorRewriter->getRewrittenText(expr->getSourceRange())+")");
+            preProcessorRewriterController->ReplaceText(expr->getSourceRange(), "("+preProcessorRewriterController->getRewrittenText(expr->getSourceRange())+")");
         }
         return true;
     }
@@ -1953,7 +1991,7 @@ public:
     PreProcessorFrontendAction() { }
 
     void EndSourceFileAction() override {
-        SourceManager &SM = preProcessorRewriter->getSourceMgr();
+        SourceManager &SM = preProcessorRewriterController->getSourceMgr();
         pathString = SM.getFileEntryForID(SM.getMainFileID())->getName();
         fs::path rawPath(pathString);
         fs::path fileDir = rawPath.parent_path();
@@ -1972,7 +2010,7 @@ public:
         std::error_code ErrorInfo;
         llvm::raw_fd_ostream outFile(pathString.c_str(), ErrorInfo);
 #endif
-        preProcessorRewriter->getEditBuffer(preProcessorRewriter->getSourceMgr().getMainFileID()).write(outFile); // --> this will write the result to outFile
+        preProcessorRewriterController->getEditBuffer(SM.getMainFileID()).write(outFile); // --> this will write the result to outFile
         outFile.close();
     }
 
