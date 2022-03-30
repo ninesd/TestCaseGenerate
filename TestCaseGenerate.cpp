@@ -1224,7 +1224,7 @@ const char switchMatchFmtLast[128] = "else klee_trigger_if_false(%d*0);\n";
 #define MODE_SEQ 1
 #define MODE_NONE -1
 
-// 包装Rewriter类，用于方便地对Rewriter类做添加kappa stmt、将内容写入本地、重置Rewriter内容等操作
+// 操作Rewriter类，用于方便地对Rewriter类做添加kappa stmt、将内容写入本地、重置Rewriter内容等操作
 class RewriterController {
 private:
     ASTContext *astContext;
