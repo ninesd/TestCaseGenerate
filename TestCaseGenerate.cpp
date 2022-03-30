@@ -77,6 +77,9 @@ int MCDCGen, MCDCAll, CDCGen, CDCAll, conditionGen, conditionAll, decisionGen, d
 // 记录找到的所有extern变量
 set<VarDecl*> externVariables;
 
+// buffer数组的最大长度
+#define MAX_BUFFER_SIZE 2048
+
 
 // 表示操作符类型，其中not可与其他操作符混用，表示对运作结果做非运算
 // 0b1000
@@ -1293,7 +1296,7 @@ public:
     void editRewriter(Expr *decision, vector<Expr*> &conditions, vector<pair<long long, long long> > &expect,
                       map<pair<long long, long long>, unsigned int> &expect2SeqNum,
                       SourceLocation declLoc, SourceLocation decisionStartLoc, SourceRange decisionSourceRange, int decisionCount, unsigned int trueCaseNum) {
-        char buffer[2048];
+        char buffer[MAX_BUFFER_SIZE];
 
         // 替换condition
         for (unsigned int i=0; i<conditions.size(); i++) {
@@ -1311,7 +1314,7 @@ public:
         }
 
         // 替换整个decision
-        char kappaRstStmt[255];
+        char kappaRstStmt[MAX_BUFFER_SIZE];
         sprintf(kappaRstStmt, kappaRstFmt, decisionCount);
         sprintf(buffer, decisionReplaceFmt, kappaRstStmt, rewriter->getRewrittenText(decisionSourceRange).c_str(),
                 kappaMatchStmt.c_str());
@@ -1416,7 +1419,7 @@ private:
                 llvm::errs() << "Found var : [" << varType << "] " << varName << "!\n";
         }
 
-        char buffer[255];
+        char buffer[MAX_BUFFER_SIZE];
 
         if (vars.count(varName) == 1) return false;
         if (type->isFunctionType()) {
@@ -1607,7 +1610,7 @@ private:
 
     // 为switch生成kappa stmt
     void insertAssertForSwitchStmt(SwitchStmt *switchStmt, int &switchCount) {
-        char buffer[255];
+        char buffer[MAX_BUFFER_SIZE];
         SwitchCase *switchCase = switchStmt->getSwitchCaseList();
         string cond = sourceCode.getRewrittenText(switchStmt->getCond()->getSourceRange());
         if (CaseStmt *caseStmt = dyn_cast<CaseStmt>(switchCase)) {
@@ -1942,11 +1945,11 @@ public:
         fs::path fileDir = rawPath.parent_path();
 
         string fileName = rawPath.filename().string();
-        fileDir /= "preProcessed-"+fileName;
+        fileDir /= "PreProcessed-"+fileName;
         string pathString = fileDir.string();
         if (fs::exists(fileDir)) fs::remove_all(fileDir);
 
-        preprocessedPathString = "preProcessed-"+fileName;
+        preprocessedPathString = "PreProcessed-"+fileName;
 
 // clang 3.4
 #if CLANG_VERSION == 3
