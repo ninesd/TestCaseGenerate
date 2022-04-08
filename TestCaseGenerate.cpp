@@ -1203,11 +1203,7 @@ public:
     }
 };
 
-string kleeInclude = "#ifdef LLBMC\n"
-                     "#include <llbmc.h>\n"
-                     "#else\n"
-                     "#include <klee/klee.h>\n"
-                     "#endif\n";
+string kleeInclude = "#include <klee/klee.h>\n";
 
 // 每一位表示一个condition
 // expect表示期望的输出 为0表示该位为false 为1表示该位为true
