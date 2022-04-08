@@ -1221,12 +1221,12 @@ const char kappaCalcFmt[128] = "((__kappa__%d__ |= (1LL*((%s)!=0)<<%d)), (__kapp
 const char decisionReplaceFmt[128] = "%s(__dv__ = %s),\n%s__dv__\n";
 
 #if CLANG_VERSION == 3
-const char kappaMatchFmt[128] = "klee_assert(__kappa__%d__ ^ __expect__%d__%d__%u__ & __SCMask__%d__%d__%u__),\n";
+const char kappaMatchFmt[128] = "klee_assert((__kappa__%d__ ^ __expect__%d__%d__%u__) & __SCMask__%d__%d__%u__),\n";
 const char switchMatchFmtFirst[128] = "if ((%s) == (%s)) klee_assert(%d*0);\n";
 const char switchMatchFmt[128] = "else if ((%s) == (%s)) klee_assert(%d*0);\n";
 const char switchMatchFmtLast[128] = "else klee_assert(%d*0);\n";
 #else
-const char kappaMatchFmt[128] = "klee_trigger_if_false(__kappa__%d__ ^ __expect__%d__%d__%u__ & __SCMask__%d__%d__%u__),\n";
+const char kappaMatchFmt[128] = "klee_trigger_if_false((__kappa__%d__ ^ __expect__%d__%d__%u__) & __SCMask__%d__%d__%u__),\n";
 const char switchMatchFmtFirst[128] = "\nif ((%s) == (%s)) klee_trigger_if_false(%d*0);\n";
 const char switchMatchFmt[128] = "else if ((%s) == (%s)) klee_trigger_if_false(%d*0);\n";
 const char switchMatchFmtLast[128] = "else klee_trigger_if_false(%d*0);\n";
