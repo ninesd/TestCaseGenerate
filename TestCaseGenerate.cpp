@@ -112,7 +112,6 @@ cl::opt<string> KleeIncludePath("klee-include-path", cl::desc("Path of klee incl
 cl::opt<string> ClangPath("clang-path", cl::desc("Path of clang"), cl::init("clang"));
 
 #if CLANG_VERSION == 3
-cl::opt<bool> NoInterpolation("no-interpolation", cl::desc("no interpolation"), cl::init(false));
 #else
 cl::opt<bool> IgnorePrintf("ignore-printf", cl::desc("Ignore Printf (default=false)"), cl::init(false));
 #endif
@@ -156,6 +155,20 @@ cl::opt<KappaGeneratePolicy> KappaMode(
         ),
 #endif
         cl::init(KappaGeneratePolicy::Decision));
+
+enum class TracerXPolicy {
+    On,
+    Off,
+    Default,
+};
+
+cl::opt<TracerXPolicy> TracerX(
+        "tracerx",
+        cl::desc("Specify the TracerX policy"),
+        cl::values(
+                clEnumValN(TracerXPolicy::On, "on", "generate all sequences in one file"),
+                clEnumValN(TracerXPolicy::Off, "off", "generate each decision one file")),
+        cl::init(TracerXPolicy::Default));
 
 
 // 将src中的全部内容添加到dest中
@@ -2078,18 +2091,17 @@ int main(int argc, const char **argv) {
 #endif
     ClangTool Tool(op.getCompilations(), op.getSourcePathList());
 
-    int result;
     vector<string> sourcePathList;
 #if CLANG_VERSION == 3
-    result = Tool.run(newFrontendActionFactory<PreProcessorFrontendAction>());
+    Tool.run(newFrontendActionFactory<PreProcessorFrontendAction>());
     sourcePathList.push_back(preprocessedPathString);
     ClangTool Tool2(op.getCompilations(), sourcePathList);
-    result = Tool2.run(newFrontendActionFactory<KappaGenerateFrontendAction>());
+    Tool2.run(newFrontendActionFactory<KappaGenerateFrontendAction>());
 #else
-    result = Tool.run(newFrontendActionFactory<PreProcessorFrontendAction>().get());
+    Tool.run(newFrontendActionFactory<PreProcessorFrontendAction>().get());
     sourcePathList.push_back(preprocessedPathString);
     ClangTool Tool2(op.getCompilations(), sourcePathList);
-    result = Tool2.run(newFrontendActionFactory<KappaGenerateFrontendAction>().get());
+    Tool2.run(newFrontendActionFactory<KappaGenerateFrontendAction>().get());
 #endif
 
     struct timeval timeCodeGenerationEnd;
@@ -2100,9 +2112,14 @@ int main(int argc, const char **argv) {
     rawPath /= resultDirStr;
 
     string kleeIncludeDir = (KleeIncludePath=="")?"":"-I "+KleeIncludePath+" ";
+    string tracerXStr;
+    switch (TracerX) {
+        case TracerXPolicy::On : tracerXStr = "-output-tree -wp-interpolant "; break;
+        case TracerXPolicy::Off : tracerXStr = "-no-interpolation "; break;
+        default : tracerXStr = "";
+    }
 #if CLANG_VERSION == 3
     string IgnorePrintfStr = "";
-    string noInterpolationStr = NoInterpolation?"-no-interpolation ":"";
 #else
     string IgnorePrintfStr = IgnorePrintf?"-ignore-printf ":"";
 #endif
@@ -2124,9 +2141,9 @@ int main(int argc, const char **argv) {
                 "            "+KleePath+" --max-memory=64000 -solver-backend=z3 --search=dfs "
                 "-dump-states-on-halt=0 "
 #if CLANG_VERSION == 3
-                "-allow-external-sym-calls -output-tree "+noInterpolationStr
+                "-allow-external-sym-calls -output-tree "
 #endif
-                +emitAllErrorsStr+emitAllErrorsInSamePathStr+IgnorePrintfStr+"${sourceFile%.c}.bc\n"
+                +emitAllErrorsStr+emitAllErrorsInSamePathStr+IgnorePrintfStr+tracerXStr+"${sourceFile%.c}.bc\n"
                 "        done\n"
                 "        cd ../\n"
                 "    fi\n"
