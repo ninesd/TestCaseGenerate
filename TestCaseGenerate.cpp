@@ -75,7 +75,7 @@ int MCDCGen, MCDCAll, CDCGen, CDCAll, conditionGen, conditionAll, decisionGen, d
 set<VarDecl*> externVariables;
 
 // buffer数组的最大长度
-#define MAX_BUFFER_SIZE 2048
+#define MAX_BUFFER_SIZE 10240
 
 string KappaSubDirNameStr = "kappa";
 
@@ -167,7 +167,13 @@ cl::opt<TracerXPolicy> TracerX(
         cl::desc("Specify the TracerX policy"),
         cl::values(
                 clEnumValN(TracerXPolicy::On, "on", "generate all sequences in one file"),
-                clEnumValN(TracerXPolicy::Off, "off", "generate each decision one file")),
+                clEnumValN(TracerXPolicy::Off, "off", "generate each decision one file"),
+                clEnumValN(TracerXPolicy::Default, "default", "generate each decision one file")
+#if CLANG_VERSION == 3
+                ,clEnumValEnd),
+#else
+        ),
+#endif
         cl::init(TracerXPolicy::Default));
 
 
@@ -1805,7 +1811,9 @@ public:
     virtual bool VisitFunctionDecl(FunctionDecl *func) {
         string funcName = func->getNameInfo().getName().getAsString();
         if (funcName.compare(targetFuncName) == 0) {
-            funcDeclList.push_back(func);
+            if (func->isThisDeclarationADefinition()) {
+                funcDeclList.push_back(func);
+            }
         }
         if (func->isMain()) {
             hasMain = true;
@@ -2110,7 +2118,8 @@ int main(int argc, const char **argv) {
     string kleeIncludeDir = (KleeIncludePath=="")?"":"-I "+KleeIncludePath+" ";
     string tracerXStr;
     switch (TracerX) {
-        case TracerXPolicy::On : tracerXStr = "-output-tree -wp-interpolant "; break;
+//        case TracerXPolicy::On : tracerXStr = "-wp-interpolant "; break;
+        case TracerXPolicy::On : tracerXStr = "-debug-subsumption "; break;
         case TracerXPolicy::Off : tracerXStr = "-no-interpolation "; break;
         default : tracerXStr = "";
     }
@@ -2194,11 +2203,11 @@ int main(int argc, const char **argv) {
         map<unsigned int, fs::path> switchTestCaseFile;
 
 #if CLANG_VERSION == 3
-        boost::regex seqIdxReg("Error: ASSERTION FAIL: __kappa__(.+)__ \\^ __expect__(.+)__(.+)__(.+)__ & __SCMask__(.+)__(.+)__(.+)__");
+        boost::regex seqIdxReg("Error: ASSERTION FAIL: \\(__kappa__(.+)__ \\^ __expect__(.+)__(.+)__(.+)__\\) & __SCMask__(.+)__(.+)__(.+)__");
         boost::regex switchSeqIdxReg("Error: ASSERTION FAIL: (.+)\\*0");
         string fileSuffix = ".assert.err";
 #else
-        boost::regex seqIdxReg("Error: TRIGGER: __kappa__(.+)__ \\^ __expect__(.+)__(.+)__(.+)__ & __SCMask__(.+)__(.+)__(.+)__");
+        boost::regex seqIdxReg("Error: TRIGGER: \\(__kappa__(.+)__ \\^ __expect__(.+)__(.+)__(.+)__\\) & __SCMask__(.+)__(.+)__(.+)__");
         boost::regex switchSeqIdxReg("Error: TRIGGER: (.+)\\*0");
         string fileSuffix = ".trigger.err";
 #endif
