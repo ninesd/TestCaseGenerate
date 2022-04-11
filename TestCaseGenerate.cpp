@@ -1643,7 +1643,8 @@ public:
             if (varDecl->hasExternalStorage()) {
                 externVariables.insert(varDecl);
             }
-            if (varDecl->hasGlobalStorage()) {
+            if (varDecl->hasExternalStorage()) {
+                llvm::errs() << "WARNING : GLOBAL VAR!\n";
                 if (insertSymbolicVar(varDecl->getType(), varDecl, false)) {
                     vars.insert(varDecl->getNameAsString());
                 }
