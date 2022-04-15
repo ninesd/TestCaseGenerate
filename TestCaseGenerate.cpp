@@ -27,6 +27,10 @@
 
 #define CLANG_VERSION 9
 
+#if CLANG_VERSION == 9
+#define TRIGGER
+#endif
+
 using namespace std;
 using namespace clang;
 using namespace clang::driver;
@@ -68,8 +72,11 @@ vector<vector<string> > conditionTextList;
 vector<string> decisionTextList;
 
 // 记录所有真值表的数量
-vector<int> allCaseCnt;
 int MCDCGen, MCDCAll, CDCGen, CDCAll, conditionGen, conditionAll, decisionGen, decisionAll, MCCGen, MCCAll, SwitchGen, SwitchAll;
+
+// 当前TriggerNum
+int triggerNum;
+vector<int> triggerNumSet;
 
 // 记录找到的所有extern变量
 set<VarDecl*> externVariables;
@@ -1222,7 +1229,7 @@ const char kappaRstFmt[128] = "\n(__kappa__%d__ = 0),\n";
 const char kappaCalcFmt[128] = "((__kappa__%d__ |= (1LL*((%s)!=0)<<%d)), (__kappa__%d__ & 1LL<<%d)!=0)\n";
 const char decisionReplaceFmt[128] = "%s(__dv__ = %s),\n%s__dv__\n";
 
-#if CLANG_VERSION == 3
+#ifndef TRIGGER
 const char kappaMatchFmt[128] = "klee_assert((__kappa__%d__ ^ __expect__%d__%d__%u__) & __SCMask__%d__%d__%u__),\n";
 const char switchMatchFmtFirst[128] = "if ((%s) == (%s)) klee_assert(%d*0);\n";
 const char switchMatchFmt[128] = "else if ((%s) == (%s)) klee_assert(%d*0);\n";
@@ -1335,6 +1342,7 @@ private:
         rewriter = make_shared<CustomRewriter>();
         rewriter->setSourceMgr(astContext->getSourceManager(), astContext->getLangOpts());
         decisionTextList.clear();
+        triggerNum = 0;
     }
 
 
@@ -1354,6 +1362,7 @@ public:
 
         writeNewFile(rewriter, pathString, coverage, mode, count);
         count++;
+        triggerNumSet.push_back(triggerNum);
 
         resetRewriter();
     }
@@ -1643,7 +1652,7 @@ public:
             if (varDecl->hasExternalStorage()) {
                 externVariables.insert(varDecl);
             }
-            if (varDecl->hasExternalStorage()) {
+            if (varDecl->hasGlobalStorage() && varDecl->getStorageClass() != StorageClass::SC_Static) {
                 if (insertSymbolicVar(varDecl->getType(), varDecl, false)) {
                     vars.insert(varDecl->getNameAsString());
                 }
@@ -1663,19 +1672,22 @@ private:
     bool isTargetFunction;
 
     // 为一个decision生成kappa stmt
-    void insertKappaStmt(Expr *decision, SourceLocation declLoc, SourceLocation decisionStartLoc, SourceRange decisionSourceRange, int decisionCount) {
+    void insertKappaStmt(Expr *decision, SourceLocation declLoc, SourceLocation decisionStartLoc, SourceRange decisionSourceRange, int decisionCount, bool isLoop=false) {
         shared_ptr<LogicExpressionTree> leTree = make_shared<LogicExpressionTree>(decision);
         map<pair<long long, long long>, unsigned int> expect2SeqNum = leTree->getSeqNumMap();
 
         if (KappaMode == KappaGeneratePolicy::All) {
+            triggerNum += expect2SeqNum.size();
             rewriterController->editRewriter(decision, leTree->conditions, leTree->MCCExpect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
         }
-        else if (KappaMode == KappaGeneratePolicy::Decision) {
+        else if (KappaMode == KappaGeneratePolicy::Decision && !isLoop) {
+            triggerNum += expect2SeqNum.size();
             rewriterController->editRewriter(decision, leTree->conditions, leTree->MCCExpect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
             rewriterController->writeResult();
         }
-        else if (KappaMode == KappaGeneratePolicy::Sequence) {
+        else if (KappaMode == KappaGeneratePolicy::Sequence || isLoop) {
             for (pair<long long, long long> expect : leTree->MCCExpect) {
+                triggerNum++;
                 rewriterController->editRewriter(decision, leTree->conditions, expect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
                 rewriterController->writeResult();
             }
@@ -1694,23 +1706,18 @@ private:
             else
                 sprintf(buffer, switchMatchFmt, cond.c_str(), condCase.c_str(), switchCount++);
             SwitchAll++;
+            triggerNum++;
         }
         else if (NULL == switchCase->getNextSwitchCase())
             return;
         else {
             sprintf(buffer, switchMatchFmtLast, switchCount++);
             SwitchAll++;
+            triggerNum++;
         }
-        if (KappaMode == KappaGeneratePolicy::All) {
-            rewriterController->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
-        }
-        else if (KappaMode == KappaGeneratePolicy::Decision) {
-            rewriterController->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
-        }
-        else if (KappaMode == KappaGeneratePolicy::Sequence) {
-            rewriterController->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
-        }
+        rewriterController->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
         switchCase = switchCase->getNextSwitchCase();
+
         while (NULL != switchCase) {
             if (CaseStmt *caseStmt = dyn_cast<CaseStmt>(switchCase)) {
                 string condCase = sourceCode.getRewrittenText(caseStmt->getLHS()->getSourceRange());
@@ -1721,15 +1728,8 @@ private:
             }
             else sprintf(buffer, switchMatchFmtLast, switchCount++);
             SwitchAll++;
-            if (KappaMode == KappaGeneratePolicy::All) {
-                rewriterController->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
-            }
-            else if (KappaMode == KappaGeneratePolicy::Decision) {
-                rewriterController->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
-            }
-            else if (KappaMode == KappaGeneratePolicy::Sequence) {
-                rewriterController->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
-            }
+            triggerNum++;
+            rewriterController->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
             switchCase = switchCase->getNextSwitchCase();
         }
         if (KappaMode == KappaGeneratePolicy::Decision || KappaMode == KappaGeneratePolicy::Sequence) {
@@ -1774,15 +1774,15 @@ public:
             decisionCount++;
         }
         if (DoStmt *doStmt = dyn_cast<DoStmt>(st)) {
-            insertKappaStmt(doStmt->getCond(), targetFuncStartLoc, doStmt->getSourceRange().getBegin(), doStmt->getCond()->getSourceRange(), decisionCount);
+            insertKappaStmt(doStmt->getCond(), targetFuncStartLoc, doStmt->getSourceRange().getBegin(), doStmt->getCond()->getSourceRange(), decisionCount, true);
             decisionCount++;
         }
         if (WhileStmt *whileStmt = dyn_cast<WhileStmt>(st)) {
-            insertKappaStmt(whileStmt->getCond(), targetFuncStartLoc, whileStmt->getSourceRange().getBegin(), whileStmt->getCond()->getSourceRange(), decisionCount);
+            insertKappaStmt(whileStmt->getCond(), targetFuncStartLoc, whileStmt->getSourceRange().getBegin(), whileStmt->getCond()->getSourceRange(), decisionCount, true);
             decisionCount++;
         }
         if (ForStmt *forStmt = dyn_cast<ForStmt>(st)) {
-            insertKappaStmt(forStmt->getCond(), targetFuncStartLoc, forStmt->getSourceRange().getBegin(), forStmt->getCond()->getSourceRange(), decisionCount);
+            insertKappaStmt(forStmt->getCond(), targetFuncStartLoc, forStmt->getSourceRange().getBegin(), forStmt->getCond()->getSourceRange(), decisionCount, true);
             decisionCount++;
         }
         if (SwitchStmt *switchStmt = dyn_cast<SwitchStmt>(st)) {
@@ -2118,8 +2118,8 @@ int main(int argc, const char **argv) {
     string kleeIncludeDir = (KleeIncludePath=="")?"":"-I "+KleeIncludePath+" ";
     string tracerXStr;
     switch (TracerX) {
-//        case TracerXPolicy::On : tracerXStr = "-wp-interpolant "; break;
-        case TracerXPolicy::On : tracerXStr = "-debug-subsumption "; break;
+        case TracerXPolicy::On : tracerXStr = "-wp-interpolant "; break;
+//        case TracerXPolicy::On : tracerXStr = "-debug-subsumption=2 "; break;
         case TracerXPolicy::Off : tracerXStr = "-no-interpolation "; break;
         default : tracerXStr = "";
     }
@@ -2143,10 +2143,14 @@ int main(int argc, const char **argv) {
                 "        for sourceFile in `ls -v kappa-*.c`;\n"
                 "        do\n"
                 "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -emit-llvm -g $sourceFile\n"
+                "            triggerNum=$(grep 'klee_trigger' $sourceFile | wc -l)\n"
                 "            "+KleePath+" --max-memory=64000 -solver-backend=z3 --search=dfs "
                 "-dump-states-on-halt=0 "
 #if CLANG_VERSION == 3
                 "-allow-external-sym-calls -output-tree "
+#endif
+#ifdef TRIGGER
+                +"-trigger-times=$triggerNum "
 #endif
                 +emitAllErrorsStr+emitAllErrorsInSamePathStr+IgnorePrintfStr+tracerXStr+"${sourceFile%.c}.bc\n"
                 "        done\n"
@@ -2202,7 +2206,7 @@ int main(int argc, const char **argv) {
         }
         map<unsigned int, fs::path> switchTestCaseFile;
 
-#if CLANG_VERSION == 3
+#ifndef TRIGGER
         boost::regex seqIdxReg("Error: ASSERTION FAIL: \\(__kappa__(.+)__ \\^ __expect__(.+)__(.+)__(.+)__\\) & __SCMask__(.+)__(.+)__(.+)__");
         boost::regex switchSeqIdxReg("Error: ASSERTION FAIL: (.+)\\*0");
         string fileSuffix = ".assert.err";
