@@ -1229,17 +1229,10 @@ const char kappaRstFmt[128] = "\n(__kappa__%d__ = 0),\n";
 const char kappaCalcFmt[128] = "((__kappa__%d__ |= (1LL*((%s)!=0)<<%d)), (__kappa__%d__ & 1LL<<%d)!=0)\n";
 const char decisionReplaceFmt[128] = "%s(__dv__ = %s),\n%s__dv__\n";
 
-#ifndef TRIGGER
-const char kappaMatchFmt[128] = "klee_assert((__kappa__%d__ ^ __expect__%d__%d__%u__) & __SCMask__%d__%d__%u__),\n";
-const char switchMatchFmtFirst[128] = "if ((%s) == (%s)) klee_assert(%d*0);\n";
-const char switchMatchFmt[128] = "else if ((%s) == (%s)) klee_assert(%d*0);\n";
-const char switchMatchFmtLast[128] = "else klee_assert(%d*0);\n";
-#else
-const char kappaMatchFmt[128] = "klee_trigger_if_false((__kappa__%d__ ^ __expect__%d__%d__%u__) & __SCMask__%d__%d__%u__),\n";
-const char switchMatchFmtFirst[128] = "\nif ((%s) == (%s)) klee_trigger_if_false(%d*0);\n";
-const char switchMatchFmt[128] = "else if ((%s) == (%s)) klee_trigger_if_false(%d*0);\n";
-const char switchMatchFmtLast[128] = "else klee_trigger_if_false(%d*0);\n";
-#endif
+const char kappaMatchFmt[128] = "%s((__kappa__%d__ ^ __expect__%d__%d__%u__) & __SCMask__%d__%d__%u__),\n";
+const char switchMatchFmtFirst[128] = "if ((%s) == (%s)) %s(%d*0);\n";
+const char switchMatchFmt[128] = "else if ((%s) == (%s)) %s(%d*0);\n";
+const char switchMatchFmtLast[128] = "else %s(%d*0);\n";
 
 #define MODE_ALL 3
 #define MODE_DEC 2
@@ -1370,7 +1363,7 @@ public:
     // 添加kappa stmt
     void editRewriter(Expr *decision, vector<Expr*> &conditions, vector<pair<long long, long long> > &expect,
                       map<pair<long long, long long>, unsigned int> &expect2SeqNum,
-                      SourceLocation declLoc, SourceLocation decisionStartLoc, SourceRange decisionSourceRange, int decisionCount, unsigned int trueCaseNum) {
+                      SourceLocation declLoc, SourceLocation decisionStartLoc, SourceRange decisionSourceRange, int decisionCount, unsigned int trueCaseNum, bool isLoop=false) {
         char buffer[MAX_BUFFER_SIZE];
 
         // 替换condition
@@ -1380,10 +1373,29 @@ public:
             ReplaceText(conditions.at(i)->getSourceRange(), buffer);
         }
 
+#ifndef TRIGGER
+        char assertFuncName[64] = "klee_assert";
+#else
+        char triggerFuncName[64] = "klee_trigger_if_false";
+        char triggerAndTerminateFuncName[64] = "klee_trigger_and_terminate_if_false";
+        char * assertFuncName = KappaMode==KappaGeneratePolicy::All?triggerFuncName:triggerAndTerminateFuncName;
+#endif
+
         // 生成断言语句
         string kappaMatchStmt = "";
         for (unsigned int i=0; i<expect.size(); i++) {
-            sprintf(buffer, kappaMatchFmt, decisionCount, decisionCount, i, expect2SeqNum[expect.at(i)],
+#ifdef TRIGGER
+            // 是循环且为Decision模式，需要特殊判断
+            if (isLoop && KappaMode==KappaGeneratePolicy::Decision){
+                // 逻辑表达式值为真，循环没有结束，需要继续运行
+                if (i < trueCaseNum)
+                    assertFuncName = triggerFuncName;
+                // 逻辑表达式值为假，循环结束，提前结束运行
+                else
+                    assertFuncName = triggerAndTerminateFuncName;
+            }
+#endif
+            sprintf(buffer, kappaMatchFmt, assertFuncName, decisionCount, decisionCount, i, expect2SeqNum[expect.at(i)],
                     decisionCount, i, expect2SeqNum[expect.at(i)]);
             kappaMatchStmt += buffer;
         }
@@ -1680,38 +1692,59 @@ private:
             triggerNum += expect2SeqNum.size();
             rewriterController->editRewriter(decision, leTree->conditions, leTree->MCCExpect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
         }
-        else if (KappaMode == KappaGeneratePolicy::Decision && !isLoop) {
+        else
+#ifndef TRIGGER
+        if (KappaMode == KappaGeneratePolicy::Decision && !isLoop) {
             triggerNum += expect2SeqNum.size();
             rewriterController->editRewriter(decision, leTree->conditions, leTree->MCCExpect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
             rewriterController->writeResult();
-        }
-        else if (KappaMode == KappaGeneratePolicy::Sequence || isLoop) {
+        } else if (KappaMode == KappaGeneratePolicy::Sequence || isLoop) {
             for (pair<long long, long long> expect : leTree->MCCExpect) {
                 triggerNum++;
                 rewriterController->editRewriter(decision, leTree->conditions, expect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
                 rewriterController->writeResult();
             }
         }
+#else
+        if (KappaMode == KappaGeneratePolicy::Decision) {
+            triggerNum += expect2SeqNum.size();
+            rewriterController->editRewriter(decision, leTree->conditions, leTree->MCCExpect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size(), isLoop);
+            rewriterController->writeResult();
+        } else if (KappaMode == KappaGeneratePolicy::Sequence) {
+            for (pair<long long, long long> expect : leTree->MCCExpect) {
+                triggerNum++;
+                rewriterController->editRewriter(decision, leTree->conditions, expect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
+                rewriterController->writeResult();
+            }
+        }
+#endif
     }
 
     // 为switch生成kappa stmt
     void insertAssertForSwitchStmt(SwitchStmt *switchStmt, int &switchCount) {
+#ifndef TRIGGER
+        char assertFuncName[64] = "klee_assert";
+#else
+        char triggerFuncName[64] = "klee_trigger_if_false";
+        char triggerAndTerminateFuncName[64] = "klee_trigger_and_terminate_if_false";
+        char * assertFuncName = KappaMode==KappaGeneratePolicy::All?triggerFuncName:triggerAndTerminateFuncName;
+#endif
         char buffer[MAX_BUFFER_SIZE];
         SwitchCase *switchCase = switchStmt->getSwitchCaseList();
         string cond = sourceCode.getRewrittenText(switchStmt->getCond()->getSourceRange());
         if (CaseStmt *caseStmt = dyn_cast<CaseStmt>(switchCase)) {
             string condCase = sourceCode.getRewrittenText(caseStmt->getLHS()->getSourceRange());
             if (NULL == switchCase->getNextSwitchCase())
-                sprintf(buffer, switchMatchFmtFirst, cond.c_str(), condCase.c_str(), switchCount++);
+                sprintf(buffer, switchMatchFmtFirst, cond.c_str(), condCase.c_str(), assertFuncName, switchCount++);
             else
-                sprintf(buffer, switchMatchFmt, cond.c_str(), condCase.c_str(), switchCount++);
+                sprintf(buffer, switchMatchFmt, cond.c_str(), condCase.c_str(), assertFuncName, switchCount++);
             SwitchAll++;
             triggerNum++;
         }
         else if (NULL == switchCase->getNextSwitchCase())
             return;
         else {
-            sprintf(buffer, switchMatchFmtLast, switchCount++);
+            sprintf(buffer, switchMatchFmtLast, assertFuncName, switchCount++);
             SwitchAll++;
             triggerNum++;
         }
@@ -1722,11 +1755,11 @@ private:
             if (CaseStmt *caseStmt = dyn_cast<CaseStmt>(switchCase)) {
                 string condCase = sourceCode.getRewrittenText(caseStmt->getLHS()->getSourceRange());
                 if (NULL == switchCase->getNextSwitchCase())
-                    sprintf(buffer, switchMatchFmtFirst, cond.c_str(), condCase.c_str(), switchCount++);
+                    sprintf(buffer, switchMatchFmtFirst, cond.c_str(), condCase.c_str(), assertFuncName, switchCount++);
                 else
-                    sprintf(buffer, switchMatchFmt, cond.c_str(), condCase.c_str(), switchCount++);
+                    sprintf(buffer, switchMatchFmt, cond.c_str(), condCase.c_str(), assertFuncName, switchCount++);
             }
-            else sprintf(buffer, switchMatchFmtLast, switchCount++);
+            else sprintf(buffer, switchMatchFmtLast, assertFuncName, switchCount++);
             SwitchAll++;
             triggerNum++;
             rewriterController->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
@@ -2149,10 +2182,12 @@ int main(int argc, const char **argv) {
 #if CLANG_VERSION == 3
                 "-allow-external-sym-calls -output-tree "
 #endif
-#ifdef TRIGGER
+#ifndef TRIGGER
+                +emitAllErrorsInSamePathStr
+#else
                 +"-trigger-times=$triggerNum "
 #endif
-                +emitAllErrorsStr+emitAllErrorsInSamePathStr+IgnorePrintfStr+tracerXStr+"${sourceFile%.c}.bc\n"
+                +emitAllErrorsStr+IgnorePrintfStr+tracerXStr+"${sourceFile%.c}.bc\n"
                 "        done\n"
                 "        cd ../\n"
                 "    fi\n"
