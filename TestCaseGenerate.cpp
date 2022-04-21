@@ -2175,7 +2175,11 @@ int main(int argc, const char **argv) {
                 "        cd $mode\n"
                 "        for sourceFile in `ls -v kappa-*.c`;\n"
                 "        do\n"
+#if CLANG_VERSION == 3
                 "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -emit-llvm -g $sourceFile\n"
+#else
+                "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -Xclang -disable-O0-optnone -emit-llvm -g $sourceFile\n"
+#endif
                 "            triggerNum=$(grep 'klee_trigger' $sourceFile | wc -l)\n"
                 "            "+KleePath+" --max-memory=64000 -solver-backend=z3 --search=dfs "
                 "-dump-states-on-halt=0 "
@@ -2185,7 +2189,7 @@ int main(int argc, const char **argv) {
 #ifndef TRIGGER
                 +emitAllErrorsInSamePathStr
 #else
-                +"-trigger-times=$triggerNum "
+                +"-trigger-times=$triggerNum -only-output-trigger "
 #endif
                 +emitAllErrorsStr+IgnorePrintfStr+tracerXStr+"${sourceFile%.c}.bc\n"
                 "        done\n"
