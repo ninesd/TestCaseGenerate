@@ -210,6 +210,11 @@ public:
             range = SourceRange(startLoc, endLoc);
         }
 
+        if (endLoc.isMacroID()) {
+            endLoc = Rewriter::getSourceMgr().getExpansionLoc(endLoc);
+            range = SourceRange(startLoc, endLoc);
+        }
+
         return Rewriter::ReplaceText(range, NewStr);
     }
 
@@ -219,6 +224,11 @@ public:
 
         if (startLoc.isMacroID()) {
             startLoc = Rewriter::getSourceMgr().getExpansionLoc(startLoc);
+            range = SourceRange(startLoc, endLoc);
+        }
+
+        if (endLoc.isMacroID()) {
+            endLoc = Rewriter::getSourceMgr().getExpansionLoc(endLoc);
             range = SourceRange(startLoc, endLoc);
         }
 
