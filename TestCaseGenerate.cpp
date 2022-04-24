@@ -84,6 +84,8 @@ set<VarDecl*> externVariables;
 // buffer数组的最大长度
 #define MAX_BUFFER_SIZE 10240
 
+#define INDENTATION_NUM 4
+
 string KappaSubDirNameStr = "kappa";
 
 
@@ -196,7 +198,7 @@ string formatDoubleValue(double val, int fixed) {
     return str.substr(0, str.find(".") + fixed + 1);
 }
 
-string replaceEnterInStr2(string str, string from="\n", string to=" ") {
+string replaceStr(string str, string from="\n", string to=" ") {
     string::size_type pos;
     do {
         pos = str.find(from);
@@ -215,7 +217,10 @@ string replaceEnterInStr(string str) {
             string::size_type pos;
             for (pos = from; pos!=str.size(); pos++)
                 if (str.at(pos)!='\n' && str.at(pos)!=' ' && str.at(pos)!='\t') break;
-            str.replace(from, pos-from, " ");
+            if (from!=0 && str.at(from-1)!=' ' && str.at(from-1)!='\t')
+                str.replace(from, pos-from, " ");
+            else
+                str.replace(from, pos-from, "");
         }
     } while (from != string::npos);
     return str;
@@ -1262,14 +1267,12 @@ string tmpVarDeclStmt = "\nint __dv__;\n";
 const char kappaDeclFmt[128] = "long long __kappa__%d__;\n";
 const char expectDeclFmt[128] = "long long __expect__%d__%d__%u__ = %lld;\n";
 const char SCMaskDeclFmt[128] = "long long __SCMask__%d__%d__%u__ = %lld;\n";
-const char kappaRstFmt[128] = "\n(__kappa__%d__ = 0),\n";
+const char kappaRstFmt[128] = "(__kappa__%d__ = 0),\n";
 const char kappaCalcFmt[128] = "((__kappa__%d__ |= (1LL*((%s)!=0)<<%d)), (__kappa__%d__ & 1LL<<%d)!=0)\n";
-const char decisionReplaceFmt[128] = "%s(__dv__ = %s),\n%s__dv__\n";
+const char decisionReplaceFmt[128] = "%s(__dv__ = %s),\n%s__dv__";
 
 const char kappaMatchFmt[128] = "%s((__kappa__%d__ ^ __expect__%d__%d__%u__) & __SCMask__%d__%d__%u__),\n";
-const char switchMatchFmtFirst[128] = "if ((%s) == (%s)) %s(%d*0);\n";
-const char switchMatchFmt[128] = "else if ((%s) == (%s)) %s(%d*0);\n";
-const char switchMatchFmtLast[128] = "else %s(%d*0);\n";
+const char switchMatchFmt[128] = "%s(%d*0);\n";
 
 string openMergeStmt = "\nklee_open_merge();\n";
 string closeMergeStmt = "\nklee_close_merge();\n";
@@ -1393,7 +1396,8 @@ private:
     string addIndentation(string str, SourceLocation loc, int offset=0) {
         SourceManager &SM = rewriter->getSourceMgr();
         SourceLocation fileStartLoc = SM.getLocForStartOfFile(SM.getMainFileID());
-        string textBefore = sourceCode.getRewrittenText(SourceRange(fileStartLoc, loc));
+        SourceRange range(fileStartLoc, loc);
+        string textBefore = sourceCode.getRewrittenText(range);
         string::size_type from = textBefore.rfind("\n");
         string indentation = "";
         if (from != string::npos) {
@@ -1453,7 +1457,7 @@ public:
         for (unsigned int i=0; i<conditions.size(); i++) {
             string conditionString = sourceCode.getRewrittenText(conditions.at(i)->getSourceRange());
             sprintf(buffer, kappaCalcFmt, decisionCount, conditionString.c_str(), i, decisionCount, i);
-            ReplaceText(conditions.at(i)->getSourceRange(), buffer);
+            ReplaceText(conditions.at(i)->getSourceRange(), buffer, decisionStartLoc, INDENTATION_NUM);
         }
 
 #ifndef TRIGGER
@@ -1488,7 +1492,7 @@ public:
         sprintf(kappaRstStmt, kappaRstFmt, decisionCount);
         sprintf(buffer, decisionReplaceFmt, kappaRstStmt, getRewrittenText(decisionSourceRange).c_str(),
                 kappaMatchStmt.c_str());
-        ReplaceText(decisionSourceRange, buffer);
+        ReplaceText(decisionSourceRange, buffer, decisionStartLoc, INDENTATION_NUM);
 
         // 添加原decision注释
         string text = sourceCode.getRewrittenText(decision->getSourceRange());
@@ -1496,7 +1500,7 @@ public:
 
         // 添加kappa定义
         sprintf(buffer, kappaDeclFmt, decisionCount);
-        InsertTextAfter(declLoc, buffer);
+        InsertTextAfter(declLoc, buffer, INDENTATION_NUM);
 
         // 添加expect和SCMask定义
         for (unsigned int i=0; i<expect.size(); i++) {
@@ -1535,17 +1539,20 @@ public:
         editRewriter(decision, conditions, expectVector, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, trueCaseNum);
     }
 
-    void InsertTextBefore(SourceLocation loc, string str) {
-        rewriter->InsertTextBefore(loc, addIndentation(str, loc));
+    void InsertTextBefore(SourceLocation loc, string str, int offset=0) {
+        rewriter->InsertTextBefore(loc, addIndentation(str, loc, offset));
     }
 
-    void InsertTextAfter(SourceLocation loc, string str) {
-        rewriter->InsertTextAfter(loc, addIndentation(str, loc));
+    void InsertTextAfter(SourceLocation loc, string str, int offset=0) {
+        rewriter->InsertTextAfter(loc, addIndentation(str, loc, offset));
     }
 
     void ReplaceText(SourceRange range, string str) {
-//        rewriter->ReplaceText(range, addIndentation(str, range.getBegin()));
         rewriter->ReplaceText(range, str);
+    }
+
+    void ReplaceText(SourceRange range, string str, SourceLocation loc, int offset=0) {
+        rewriter->ReplaceText(range, addIndentation(str, loc, offset));
     }
 
     string getRewrittenText(SourceRange range) const { return rewriter->getRewrittenText(range); }
@@ -1820,38 +1827,12 @@ private:
         rewriterController->addDecisionText(switchStmt->getSourceRange().getBegin(),
                                             sourceCode.getRewrittenText(switchStmt->getCond()->getSourceRange()));
         SwitchCase *switchCase = switchStmt->getSwitchCaseList();
-        string cond = sourceCode.getRewrittenText(switchStmt->getCond()->getSourceRange());
-        if (CaseStmt *caseStmt = dyn_cast<CaseStmt>(switchCase)) {
-            string condCase = sourceCode.getRewrittenText(caseStmt->getLHS()->getSourceRange());
-            if (NULL == switchCase->getNextSwitchCase())
-                sprintf(buffer, switchMatchFmtFirst, cond.c_str(), condCase.c_str(), assertFuncName, switchCount++);
-            else
-                sprintf(buffer, switchMatchFmt, cond.c_str(), condCase.c_str(), assertFuncName, switchCount++);
-            SwitchAll++;
-            triggerNum++;
-        }
-        else if (NULL == switchCase->getNextSwitchCase())
-            return;
-        else {
-            sprintf(buffer, switchMatchFmtLast, assertFuncName, switchCount++);
-            SwitchAll++;
-            triggerNum++;
-        }
-        rewriterController->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
-        switchCase = switchCase->getNextSwitchCase();
-
         while (NULL != switchCase) {
-            if (CaseStmt *caseStmt = dyn_cast<CaseStmt>(switchCase)) {
-                string condCase = sourceCode.getRewrittenText(caseStmt->getLHS()->getSourceRange());
-                if (NULL == switchCase->getNextSwitchCase())
-                    sprintf(buffer, switchMatchFmtFirst, cond.c_str(), condCase.c_str(), assertFuncName, switchCount++);
-                else
-                    sprintf(buffer, switchMatchFmt, cond.c_str(), condCase.c_str(), assertFuncName, switchCount++);
-            }
-            else sprintf(buffer, switchMatchFmtLast, assertFuncName, switchCount++);
             SwitchAll++;
             triggerNum++;
-            rewriterController->InsertTextBefore(switchStmt->getSourceRange().getBegin(), buffer);
+            sprintf(buffer, switchMatchFmt, assertFuncName, switchCount++);
+            rewriterController->InsertTextAfter(switchCase->getSubStmt()->getSourceRange().getBegin(), buffer, INDENTATION_NUM);
+
             switchCase = switchCase->getNextSwitchCase();
         }
         if (KappaMode == KappaGeneratePolicy::Decision || KappaMode == KappaGeneratePolicy::Sequence) {
