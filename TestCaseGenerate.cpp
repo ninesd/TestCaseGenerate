@@ -117,6 +117,8 @@ cl::opt<int> boundary("boundary", cl::desc("Upper Bound and Lower Bound of INT v
 cl::opt<string> KleePath("klee-path", cl::desc("Path of klee"), cl::init("klee"));
 cl::opt<string> KleeIncludePath("klee-include-path", cl::desc("Path of klee include dir"), cl::init(""));
 cl::opt<string> ClangPath("clang-path", cl::desc("Path of clang"), cl::init("clang"));
+cl::opt<string> Searcher("searcher", cl::desc("Searcher"), cl::init("dfs"));
+cl::opt<bool> EnableMerge("use-merge", cl::desc("Use KLEE merge"), cl::init(false));
 
 #if CLANG_VERSION == 3
 #else
@@ -192,6 +194,31 @@ void addAll(vector<pair<long long, long long> > &dest, vector<pair<long long, lo
 string formatDoubleValue(double val, int fixed) {
     string str = std::to_string(val);
     return str.substr(0, str.find(".") + fixed + 1);
+}
+
+string replaceEnterInStr2(string str, string from="\n", string to=" ") {
+    string::size_type pos;
+    do {
+        pos = str.find(from);
+        if (pos != string::npos) {
+            str.replace(pos, from.size(), to);
+        }
+    } while (pos != string::npos);
+    return str;
+}
+
+string replaceEnterInStr(string str) {
+    string::size_type from;
+    do {
+        from = str.find("\n");
+        if (from != string::npos) {
+            string::size_type pos;
+            for (pos = from; pos!=str.size(); pos++)
+                if (str.at(pos)!='\n' && str.at(pos)!=' ' && str.at(pos)!='\t') break;
+            str.replace(from, pos-from, " ");
+        }
+    } while (from != string::npos);
+    return str;
 }
 
 
@@ -285,7 +312,7 @@ private:
                 truthTable += "T   |";
             else
                 truthTable += "F   |";
-            if (testCaseFileNameList.size() == 0)
+            if (testCaseFileNameList.empty())
                 truthTable += "\n| ";
             else
                 truthTable += "   "+testCaseFileNameList.at(i)+"\n| ";
@@ -294,7 +321,7 @@ private:
         llvm::errs() << truthTable << "\n";
         llvm::errs() << "generate " << to_string(cnt) << " cases!\n";
 
-        if (testCaseFileNameList.size() != 0) {
+        if (!testCaseFileNameList.empty()) {
             messageStr += truthTable+"\n"+"generate "+to_string(cnt)+" cases!\n";
         }
 
@@ -824,9 +851,9 @@ public:
         addAll(allCases, falseCases);
         conditionNum = conditions.size();
 
-        llvm::errs() << "------->>>   " << decision << "   <<<-------\n";
+        llvm::errs() << "------->>>   " << replaceEnterInStr(decision) << "   <<<-------\n";
         if (!testCaseFileNameList.empty())
-            messageStr += "------->>>   "+decision+"   <<<-------\n";
+            messageStr += "------->>>   "+replaceEnterInStr(decision)+"   <<<-------\n";
 
         if (MCCOutput) {
             if (allCases.size() != 0) {
@@ -1222,7 +1249,7 @@ public:
         string decisionText = sourceCode.getRewrittenText(decision->getSourceRange());
         TestCaseSelector testCaseSelector(root->MCCTrueCase, root->MCCFalseCase, conditionText, decisionText);
         conditionTextList.push_back(std::move(conditionText));
-        decisionTextList.push_back(decisionText);
+        decisionTextList.push_back(replaceEnterInStr(decisionText));
     }
 };
 
@@ -1243,6 +1270,9 @@ const char kappaMatchFmt[128] = "%s((__kappa__%d__ ^ __expect__%d__%d__%u__) & _
 const char switchMatchFmtFirst[128] = "if ((%s) == (%s)) %s(%d*0);\n";
 const char switchMatchFmt[128] = "else if ((%s) == (%s)) %s(%d*0);\n";
 const char switchMatchFmtLast[128] = "else %s(%d*0);\n";
+
+string openMergeStmt = "\nklee_open_merge();\n";
+string closeMergeStmt = "\nklee_close_merge();\n";
 
 #define MODE_ALL 3
 #define MODE_DEC 2
@@ -1295,10 +1325,11 @@ private:
     // 后处理，添加include、桩函数，删除extern关键词
     void postEditRewriter() {
         SourceManager &SM = rewriter->getSourceMgr();
+        SourceLocation fileStartLoc = SM.getLocForStartOfFile(SM.getMainFileID());
 
         // 添加include文本
         if (addInclude) {
-            InsertTextAfter(SM.getLocForStartOfFile(SM.getMainFileID()), kleeInclude);
+            InsertTextAfter(fileStartLoc, kleeInclude);
         }
 
         // 添加驱动函数文本
@@ -1338,6 +1369,17 @@ private:
         // 添加原decision注释
         for (pair<SourceLocation, string> decisionText : decisionTextList)
             InsertTextAfter(decisionText.first, decisionText.second);
+
+        // 添加klee_merge
+        if (EnableMerge) {
+            InsertTextAfter(targetFuncStartLoc, openMergeStmt);
+            for (pair<SourceLocation, string> decisionText : decisionTextList) {
+                if (KappaMode == KappaGeneratePolicy::All && (decisionText == decisionTextList.at(0))) continue;
+                InsertTextAfter(decisionText.first, closeMergeStmt);
+                if ((decisionText == decisionTextList.at(decisionTextList.size()-1))) continue;
+                InsertTextAfter(decisionText.first, openMergeStmt);
+            }
+        }
     }
 
     // 重置Rewriter，恢复原始文本
@@ -1346,6 +1388,33 @@ private:
         rewriter->setSourceMgr(astContext->getSourceManager(), astContext->getLangOpts());
         decisionTextList.clear();
         triggerNum = 0;
+    }
+
+    string addIndentation(string str, SourceLocation loc, int offset=0) {
+        SourceManager &SM = rewriter->getSourceMgr();
+        SourceLocation fileStartLoc = SM.getLocForStartOfFile(SM.getMainFileID());
+        string textBefore = sourceCode.getRewrittenText(SourceRange(fileStartLoc, loc));
+        string::size_type from = textBefore.rfind("\n");
+        string indentation = "";
+        if (from != string::npos) {
+            from++;
+            string::size_type pos;
+            for (pos = from; pos!=textBefore.size(); pos++)
+                if (textBefore.at(pos)!=' ' && textBefore.at(pos)!='\t') break;
+            indentation = textBefore.substr(from, pos-from);
+        }
+        for (int i=0; i<offset; i++)
+            indentation += " ";
+        if (indentation == "") return str;
+
+        string::size_type enterLoc = str.size();
+        while (enterLoc != string::npos && enterLoc != 0) {
+            enterLoc = str.rfind("\n", enterLoc-1);
+            if (enterLoc != string::npos) {
+                str.insert(enterLoc+1, indentation);
+            }
+        }
+        return str;
     }
 
 
@@ -1358,6 +1427,10 @@ public:
     }
 
     shared_ptr<CustomRewriter> getRewriter() { return rewriter; }
+
+    void addDecisionText(SourceLocation loc, string text) {
+        decisionTextList.push_back(make_pair(loc, "\n// "+replaceEnterInStr(text)+"\n"));
+    }
 
     // 将编辑后的内容写入本地
     void writeResult() {
@@ -1418,7 +1491,8 @@ public:
         ReplaceText(decisionSourceRange, buffer);
 
         // 添加原decision注释
-        InsertTextAfter(declLoc, "\n// "+sourceCode.getRewrittenText(decision->getSourceRange())+"\n");
+        string text = sourceCode.getRewrittenText(decision->getSourceRange());
+        InsertTextAfter(declLoc, "\n// "+replaceEnterInStr(text)+"\n");
 
         // 添加kappa定义
         sprintf(buffer, kappaDeclFmt, decisionCount);
@@ -1449,7 +1523,7 @@ public:
         }
 
         // 添加原decision注释
-        decisionTextList.push_back(make_pair(decisionStartLoc, "\n// "+sourceCode.getRewrittenText(decision->getSourceRange())+"\n"));
+        addDecisionText(decisionStartLoc, sourceCode.getRewrittenText(decision->getSourceRange()));
     }
 
     // 添加kappa stmt 单个expect
@@ -1462,14 +1536,17 @@ public:
     }
 
     void InsertTextBefore(SourceLocation loc, string str) {
-        rewriter->InsertTextBefore(loc, str);
+        rewriter->InsertTextBefore(loc, addIndentation(str, loc));
     }
 
     void InsertTextAfter(SourceLocation loc, string str) {
-        rewriter->InsertTextAfter(loc, str);
+        rewriter->InsertTextAfter(loc, addIndentation(str, loc));
     }
 
-    void ReplaceText(SourceRange range, string str) { rewriter->ReplaceText(range, str); }
+    void ReplaceText(SourceRange range, string str) {
+//        rewriter->ReplaceText(range, addIndentation(str, range.getBegin()));
+        rewriter->ReplaceText(range, str);
+    }
 
     string getRewrittenText(SourceRange range) const { return rewriter->getRewrittenText(range); }
 
@@ -1740,6 +1817,8 @@ private:
         char * assertFuncName = KappaMode==KappaGeneratePolicy::All?triggerFuncName:triggerAndTerminateFuncName;
 #endif
         char buffer[MAX_BUFFER_SIZE];
+        rewriterController->addDecisionText(switchStmt->getSourceRange().getBegin(),
+                                            sourceCode.getRewrittenText(switchStmt->getCond()->getSourceRange()));
         SwitchCase *switchCase = switchStmt->getSwitchCaseList();
         string cond = sourceCode.getRewrittenText(switchStmt->getCond()->getSourceRange());
         if (CaseStmt *caseStmt = dyn_cast<CaseStmt>(switchCase)) {
@@ -1845,7 +1924,8 @@ private:
 public:
     explicit FunctionDeclCollectorVisitor(CompilerInstance *CI)
             : astContext(&(CI->getASTContext())) {
-        sourceCode.setSourceMgr(astContext->getSourceManager(), astContext->getLangOpts());
+        SourceManager &SM = astContext->getSourceManager();
+        sourceCode.setSourceMgr(SM, astContext->getLangOpts());
         funcDeclList.clear();
         targetFuncDecl = NULL;
         hasMain = false;
@@ -2014,18 +2094,34 @@ shared_ptr<RewriterController> preProcessorRewriterController;
 class PreProcessorVisitor : public RecursiveASTVisitor<PreProcessorVisitor> {
 private:
     ASTContext *astContext;
+//    bool isFirstStmt;
 
 public:
     explicit PreProcessorVisitor(CompilerInstance *CI)
             : astContext(&(CI->getASTContext())) {
         preProcessorRewriterController = make_shared<RewriterController>(astContext);
     }
+//
+//    virtual bool VisitFunctionDecl(FunctionDecl *func) {
+//        isFirstStmt = true;
+//        return true;
+//    }
 
     virtual bool VisitStmt(Stmt *st) {
         if (IfStmt *ifStmt = dyn_cast<IfStmt>(st)) {
             Expr * expr = ifStmt->getCond();
-            preProcessorRewriterController->ReplaceText(expr->getSourceRange(), "("+preProcessorRewriterController->getRewrittenText(expr->getSourceRange())+")");
+            string decisionText = replaceEnterInStr(preProcessorRewriterController->getRewrittenText(expr->getSourceRange()));
+            preProcessorRewriterController->ReplaceText(expr->getSourceRange(), "("+decisionText+")");
         }
+//        if (isFirstStmt) {
+//            if (CompoundStmt *compoundStmt = dyn_cast<CompoundStmt>(st)) {
+//                if (!compoundStmt->body_empty()) {
+//                    Stmt *firstStmt = *(compoundStmt->body_begin());
+//                    preProcessorRewriterController->InsertTextAfter(firstStmt->getSourceRange().getBegin(), "if (0) (void) 0;\n");
+//                }
+//            }
+//            isFirstStmt = false;
+//        }
         return true;
     }
 };
@@ -2166,6 +2262,13 @@ int main(int argc, const char **argv) {
         case TracerXPolicy::Off : tracerXStr = "-no-interpolation "; break;
         default : tracerXStr = "";
     }
+    string searcherStr;
+    switch (TracerX) {
+        case TracerXPolicy::On : searcherStr = "-search=dfs "; break;
+        case TracerXPolicy::Off : searcherStr = "-search="+Searcher+" "; break;
+        default : searcherStr = "-search=dfs ";
+    }
+    string useMergeStr = EnableMerge?"-use-merge ":"";
 #if CLANG_VERSION == 3
     string IgnorePrintfStr = "";
 #else
@@ -2191,8 +2294,8 @@ int main(int argc, const char **argv) {
                 "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -Xclang -disable-O0-optnone -emit-llvm -gline-tables-only $sourceFile\n"
 #endif
                 "            triggerNum=$(grep 'klee_trigger' $sourceFile | wc -l)\n"
-                "            "+KleePath+" --max-memory=64000 -solver-backend=z3 --search=dfs "
-                "-dump-states-on-halt=0 "
+                "            "+KleePath+" -max-memory=64000 -solver-backend=z3 "
+                "-dump-states-on-halt=false "+searcherStr+useMergeStr
 #if CLANG_VERSION == 3
                 "-allow-external-sym-calls -output-tree "
 #endif
