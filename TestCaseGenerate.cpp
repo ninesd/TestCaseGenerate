@@ -1994,13 +1994,13 @@ public:
         // 没有找到符合该名称的函数
         if (funcDeclList.size() == 0) {
             llvm::errs() << "ERROR : function named \"" << targetFuncName << "\" not found!\n";
-            return;
+            exit(EXIT_FAILURE);
         }
         // 正好找到了一个符合该名称的函数
         if (funcDeclList.size() == 1) {
             targetFuncDecl = funcDeclList.at(0);
         }
-            // 找到了不止一个符合该名称的函数
+        // 找到了不止一个符合该名称的函数
         else {
             llvm::errs() << "found " << funcDeclList.size() << " functions named " << targetFuncName << ":\n";
             for (unsigned int i=0; i<funcDeclList.size(); i++) {
@@ -2113,7 +2113,6 @@ public:
         if (IfStmt *ifStmt = dyn_cast<IfStmt>(st)) {
             Expr * expr = ifStmt->getCond();
             string decisionText = replaceEnterInStr(preProcessorRewriterController->getRewrittenText(expr->getSourceRange()));
-            llvm::errs() <<"["<<decisionText<<"]\n";
             preProcessorRewriterController->ReplaceText(expr->getSourceRange(), "("+decisionText+")");
         }
 //        if (isFirstStmt) {
