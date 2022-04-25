@@ -212,11 +212,14 @@ string replaceStr(string str, string from="\n", string to=" ") {
 string replaceEnterInStr(string str) {
     string::size_type from;
     do {
+        // 找到文本中换行符出现的位置
         from = str.find("\n");
         if (from != string::npos) {
             string::size_type pos;
+            // 从换行符开始，标记所有连续空白符
             for (pos = from; pos!=str.size(); pos++)
                 if (str.at(pos)!='\n' && str.at(pos)!=' ' && str.at(pos)!='\t') break;
+            // 若换行符前没有空白符，添加空格
             if (from!=0 && str.at(from-1)!=' ' && str.at(from-1)!='\t')
                 str.replace(from, pos-from, " ");
             else
@@ -1394,12 +1397,15 @@ private:
     }
 
     string addIndentation(string str, SourceLocation loc, int offset=0) {
+        string indentation = "";
+        // 获取该位置之前的文本
         SourceManager &SM = rewriter->getSourceMgr();
         SourceLocation fileStartLoc = SM.getLocForStartOfFile(SM.getMainFileID());
         SourceRange range(fileStartLoc, loc);
         string textBefore = sourceCode.getRewrittenText(range);
+        // 找到之前文本的最后一个换行符
         string::size_type from = textBefore.rfind("\n");
-        string indentation = "";
+        // 获取该换行符后的连续空白字符
         if (from != string::npos) {
             from++;
             string::size_type pos;
@@ -1411,10 +1417,12 @@ private:
             indentation += " ";
         if (indentation == "") return str;
 
+        // 为待处理字符串的每个换行符后面添加空白字符，若换行符后已经有空白字符，则不添加
         string::size_type enterLoc = str.size();
         while (enterLoc != string::npos && enterLoc != 0) {
             enterLoc = str.rfind("\n", enterLoc-1);
-            if (enterLoc != string::npos) {
+            if (enterLoc != string::npos &&
+            (enterLoc==str.size()-1 || (str.at(enterLoc+1)!=' ' && str.at(enterLoc+1)!='\t'))) {
                 str.insert(enterLoc+1, indentation);
             }
         }
@@ -1457,7 +1465,7 @@ public:
         for (unsigned int i=0; i<conditions.size(); i++) {
             string conditionString = sourceCode.getRewrittenText(conditions.at(i)->getSourceRange());
             sprintf(buffer, kappaCalcFmt, decisionCount, conditionString.c_str(), i, decisionCount, i);
-            ReplaceText(conditions.at(i)->getSourceRange(), buffer, decisionStartLoc, INDENTATION_NUM);
+            ReplaceText(conditions.at(i)->getSourceRange(), buffer, decisionStartLoc, INDENTATION_NUM+8);
         }
 
 #ifndef TRIGGER
@@ -1500,7 +1508,7 @@ public:
 
         // 添加kappa定义
         sprintf(buffer, kappaDeclFmt, decisionCount);
-        InsertTextAfter(declLoc, buffer, INDENTATION_NUM);
+        InsertTextAfter(declLoc, buffer);
 
         // 添加expect和SCMask定义
         for (unsigned int i=0; i<expect.size(); i++) {
@@ -1872,6 +1880,11 @@ public:
     virtual bool VisitStmt(Stmt *st) {
         if (!isTargetFunction) return true;
 
+        SourceRange range = st->getSourceRange();
+        if (range.getBegin().isMacroID()) {
+            return true;
+        }
+
         if (IfStmt *ifStmt = dyn_cast<IfStmt>(st)) {
             insertKappaStmt(ifStmt->getCond(), targetFuncStartLoc, ifStmt->getSourceRange().getBegin(), ifStmt->getCond()->getSourceRange(), decisionCount);
             decisionCount++;
@@ -1969,7 +1982,10 @@ public:
             : functionDeclCollectorVisitor(new FunctionDeclCollectorVisitor(CI)),
               driverFuncGenerateVisitor(new DriverFuncGenerateVisitor(CI)),
               kappaGenerateVisitor(new KappaGenerateVisitor(CI))
-    { }
+    {
+        langOptions = CI->getLangOpts();
+        printingPolicy = PrintingPolicy(langOptions);
+    }
 
     // clang相关主要函数
     virtual void HandleTranslationUnit(ASTContext &Context) {
@@ -2089,9 +2105,15 @@ public:
 //    }
 
     virtual bool VisitStmt(Stmt *st) {
+        SourceRange range = st->getSourceRange();
+        if (range.getBegin().isMacroID()) {
+            return true;
+        }
+
         if (IfStmt *ifStmt = dyn_cast<IfStmt>(st)) {
             Expr * expr = ifStmt->getCond();
             string decisionText = replaceEnterInStr(preProcessorRewriterController->getRewrittenText(expr->getSourceRange()));
+            llvm::errs() <<"["<<decisionText<<"]\n";
             preProcessorRewriterController->ReplaceText(expr->getSourceRange(), "("+decisionText+")");
         }
 //        if (isFirstStmt) {
