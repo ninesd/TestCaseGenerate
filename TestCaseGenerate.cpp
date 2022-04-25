@@ -217,7 +217,7 @@ string replaceEnterInStr(string str) {
         if (from != string::npos) {
             string::size_type pos;
             // 从换行符开始，标记所有连续空白符
-            for (pos = from; pos!=str.size(); pos++)
+            for (pos = from; pos<str.size(); pos++)
                 if (str.at(pos)!='\n' && str.at(pos)!=' ' && str.at(pos)!='\t') break;
             // 若换行符前没有空白符，添加空格
             if (from!=0 && str.at(from-1)!=' ' && str.at(from-1)!='\t')
@@ -1409,7 +1409,7 @@ private:
         if (from != string::npos) {
             from++;
             string::size_type pos;
-            for (pos = from; pos!=textBefore.size(); pos++)
+            for (pos = from; pos<textBefore.size(); pos++)
                 if (textBefore.at(pos)!=' ' && textBefore.at(pos)!='\t') break;
             indentation = textBefore.substr(from, pos-from);
         }
