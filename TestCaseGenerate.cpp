@@ -1654,10 +1654,15 @@ private:
                 if (!pointeeType.getTypePtr()->getUnqualifiedDesugaredType()->isFundamentalType()) {
                     llvm::errs() << "WARNING : [" << varType << "] " << varName << " is not a support type variable!\n";
                 }
-                if (isParam) makeSymbolicStmt += "    "+paramDeclText+";\n";
                 string newVarDeclText = pointeeType.getAsString(printingPolicy) + " ___"+varName+"___";
                 makeSymbolicStmt += "    "+newVarDeclText+";\n";
-                makeSymbolicStmt += "    "+varName+" = &___"+varName+"___;\n";
+                if (isParam) {6
+                    makeSymbolicStmt += "    "+paramDeclText+" = &___"+varName+"___;\n";
+                }
+                else {
+                    makeSymbolicStmt += "    "+varName+" = &___"+varName+"___;\n";
+                }
+
                 sprintf(buffer, makeSymbolicFmt, ("&___"+varName+"___").c_str(), ("___"+varName+"___").c_str(),
                         (varDeclText + " ---> " + newVarDeclText).c_str());
                 makeSymbolicStmt += "    ";
