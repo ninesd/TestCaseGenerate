@@ -101,30 +101,31 @@ string KappaSubDirNameStr = "kappa";
 
 static cl::OptionCategory TCGCategory("TCG options");
 
-cl::opt<bool> conditionCoverageOutput("condition", cl::desc("create condition coverage output file"), cl::init(false));
-cl::opt<bool> decisionCoverageOutput("decision", cl::desc("create decision coverage output file"), cl::init(false));
-cl::opt<bool> CDCOutput("CDC", cl::desc("create CDC output file"), cl::init(false));
-cl::opt<bool> MCCOutput("MCC", cl::desc("create MCC output file"), cl::init(false));
-cl::opt<bool> MCDCOutput("MCDC", cl::desc("create MCDC output file"), cl::init(false));
-cl::opt<bool> statementCoverageOutput("statement", cl::desc("create statement coverage output file"), cl::init(false));
-cl::opt<bool> pathCoverageOutput("path", cl::desc("create path coverage output file"), cl::init(false));
+cl::opt<bool> conditionCoverageOutput("condition", cl::desc("create condition coverage output file (default=false)."), cl::init(false));
+cl::opt<bool> decisionCoverageOutput("decision", cl::desc("create decision coverage output file (default=false)."), cl::init(false));
+cl::opt<bool> CDCOutput("CDC", cl::desc("create CDC output file (default=false)."), cl::init(false));
+cl::opt<bool> MCCOutput("MCC", cl::desc("create MCC output file (default=false)."), cl::init(false));
+cl::opt<bool> MCDCOutput("MCDC", cl::desc("create MCDC output file (default=false)."), cl::init(false));
+cl::opt<bool> statementCoverageOutput("statement", cl::desc("create statement coverage output file (default=false)."), cl::init(false));
+cl::opt<bool> pathCoverageOutput("path", cl::desc("create path coverage output file (default=false)."), cl::init(false));
 
-cl::opt<bool> addInclude("addI", cl::desc("add klee include at the start of the file"), cl::init(true));
-cl::opt<bool> addDriverFunc("addD", cl::desc("add parameter definition, klee symbolic definition and function call at the start of main function"), cl::init(true));
-cl::opt<string> targetFuncName("func", cl::desc("function to be tested"), cl::init("main"));
-cl::opt<bool> runKlee("runKlee", cl::desc("run klee after source2source transform"), cl::init(true));
-cl::opt<bool> DEBUG("DEBUG", cl::desc("output debug message"), cl::init(false));
-cl::opt<bool> EmitAllErrors("emit-all-errors", cl::desc("generate tests cases for all errors"), cl::init(false));
-cl::opt<int> boundary("boundary", cl::desc("Upper Bound and Lower Bound of INT value"), cl::init(-1));
+cl::opt<bool> addInclude("addI", cl::desc("add klee include at the start of the file (default=true)."), cl::init(true));
+cl::opt<bool> addDriverFunc("addD", cl::desc("add parameter definition, klee symbolic definition and function call at the start of main function (default=true)."), cl::init(true));
+cl::opt<string> targetFuncName("func", cl::desc("function to be tested (default=main)."), cl::init("main"));
+cl::opt<bool> runKlee("runKlee", cl::desc("run klee after source2source transform (default=true)."), cl::init(true));
+cl::opt<bool> DEBUG("DEBUG", cl::desc("output debug message (default=false)."), cl::init(false));
+cl::opt<bool> EmitAllErrors("emit-all-errors", cl::desc("generate tests cases for all errors (default=false)."), cl::init(false));
+cl::opt<int> boundary("boundary", cl::desc("Upper Bound and Lower Bound of INT value (default=-1, unbounded)."), cl::init(-1));
 cl::opt<string> KleePath("klee-path", cl::desc("Path of klee"), cl::init("klee"));
 cl::opt<string> KleeIncludePath("klee-include-path", cl::desc("Path of klee include dir"), cl::init(""));
 cl::opt<string> ClangPath("clang-path", cl::desc("Path of clang"), cl::init("clang"));
-cl::opt<string> Searcher("searcher", cl::desc("Searcher"), cl::init("dfs"));
-cl::opt<bool> EnableMerge("use-merge", cl::desc("Use KLEE merge"), cl::init(false));
+cl::opt<string> Searcher("searcher", cl::desc("Searcher (default=dfs)."), cl::init("dfs"));
+cl::opt<bool> EnableMerge("use-merge", cl::desc("Use KLEE merge (default=false)."), cl::init(false));
+cl::opt<bool> AddIndentation("indentation", cl::desc("Add Indentation (default=true)."), cl::init(true));
 
 #if CLANG_VERSION == 3
 #else
-cl::opt<bool> IgnorePrintf("ignore-printf", cl::desc("Ignore Printf (default=false)"), cl::init(false));
+cl::opt<bool> IgnorePrintf("ignore-printf", cl::desc("Ignore Printf (default=false)."), cl::init(false));
 #endif
 
 enum class SearchPolicy {
@@ -1124,7 +1125,7 @@ private:
                 // FXF
                 addAll(node->MCCFalseCase, node->left->MCCFalseCase);
             }
-                // 该节点需要做或运算
+            // 该节点需要做或运算
             else if ((node->op & OR) != 0) {
                 // TXT
                 addAll(node->MCCTrueCase, node->left->MCCTrueCase);
@@ -1139,7 +1140,7 @@ private:
                     }
                 }
             }
-                // 该节点需要做异或运算
+            // 该节点需要做异或运算
             else {
                 for (pair<long long, long long> leftFalse : node->left->MCCFalseCase) {
                     // FTT
@@ -1396,6 +1397,7 @@ private:
         triggerNum = 0;
     }
 
+    // 自动添加行首空格
     string addIndentation(string str, SourceLocation loc, int offset=0) {
         string indentation = "";
         // 获取该位置之前的文本
@@ -1656,7 +1658,7 @@ private:
                 }
                 string newVarDeclText = pointeeType.getAsString(printingPolicy) + " ___"+varName+"___";
                 makeSymbolicStmt += "    "+newVarDeclText+";\n";
-                if (isParam) {6
+                if (isParam) {
                     makeSymbolicStmt += "    "+paramDeclText+" = &___"+varName+"___;\n";
                 }
                 else {
