@@ -25,7 +25,7 @@
 #include <boost/regex.hpp>
 #include <sys/time.h>
 
-#define CLANG_VERSION 9
+#define CLANG_VERSION 3
 
 #if CLANG_VERSION == 9
 #define TRIGGER
@@ -2304,16 +2304,16 @@ int main(int argc, const char **argv) {
 #endif
                 "            triggerNum=$(grep 'klee_trigger' $sourceFile | wc -l)\n"
                 "            "+KleePath+" -max-memory=64000 -solver-backend=z3 "
-                "-dump-states-on-halt=false "+searcherStr+useMergeStr
+                "-dump-states-on-halt=false "
 #if CLANG_VERSION == 3
-                "-allow-external-sym-calls -output-tree "
+                "-allow-external-sym-calls "
 #endif
 #ifndef TRIGGER
                 +emitAllErrorsInSamePathStr
 #else
-                +"-trigger-times=$triggerNum -only-output-trigger "
+                "-trigger-times=$triggerNum -only-output-trigger "
 #endif
-                +emitAllErrorsStr+IgnorePrintfStr+tracerXStr+"${sourceFile%.c}.bc\n"
+                +searcherStr+useMergeStr+emitAllErrorsStr+IgnorePrintfStr+tracerXStr+"${sourceFile%.c}.bc\n"
                 "        done\n"
                 "        cd ../\n"
                 "    fi\n"
