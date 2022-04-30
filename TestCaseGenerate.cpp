@@ -25,9 +25,9 @@
 #include <boost/regex.hpp>
 #include <sys/time.h>
 
-#define CLANG_VERSION 3
+#define CLANG_VERSION 9
 
-#if CLANG_VERSION == 9
+#if CLANG_VERSION > 3
 #define TRIGGER
 #endif
 
@@ -122,6 +122,7 @@ cl::opt<string> ClangPath("clang-path", cl::desc("Path of clang"), cl::init("cla
 cl::opt<string> Searcher("searcher", cl::desc("Searcher (default=dfs)."), cl::init("dfs"));
 cl::opt<bool> EnableMerge("use-merge", cl::desc("Use KLEE merge (default=false)."), cl::init(false));
 cl::opt<bool> AddIndentation("indentation", cl::desc("Add Indentation (default=true)."), cl::init(true));
+cl::opt<bool> GlobalVarSym("global-var-sym", cl::desc("Make global variable symbolic (default=true)."), cl::init(true));
 
 #if CLANG_VERSION == 3
 #else
@@ -136,7 +137,7 @@ enum class SearchPolicy {
 
 cl::opt<SearchPolicy> SearchMode(
         "search-mode",
-        cl::desc("Specify the search policy"),
+        cl::desc("Specify the search policy (default=auto)."),
         cl::values(
                 clEnumValN(SearchPolicy::Auto, "auto", "Switch between Search and Greedy depend on the input size"),
                 clEnumValN(SearchPolicy::Search, "search", "Always Search"),
@@ -156,7 +157,7 @@ enum class KappaGeneratePolicy {
 
 cl::opt<KappaGeneratePolicy> KappaMode(
         "kappa-mode",
-        cl::desc("Specify the Kappa generate policy"),
+        cl::desc("Specify the Kappa generate policy (default=d)."),
         cl::values(
                 clEnumValN(KappaGeneratePolicy::All, "a", "generate all sequences in one file"),
                 clEnumValN(KappaGeneratePolicy::Decision, "d", "generate each decision one file"),
@@ -176,7 +177,7 @@ enum class TracerXPolicy {
 
 cl::opt<TracerXPolicy> TracerX(
         "tracerx",
-        cl::desc("Specify the TracerX policy"),
+        cl::desc("Specify the TracerX policy (default=default)."),
         cl::values(
                 clEnumValN(TracerXPolicy::On, "on", "generate all sequences in one file"),
                 clEnumValN(TracerXPolicy::Off, "off", "generate each decision one file"),
@@ -1378,6 +1379,7 @@ private:
             InsertTextAfter(decisionText.first, decisionText.second);
 
         // 添加klee_merge
+#if CLANG_VERSION > 3
         if (EnableMerge) {
             InsertTextAfter(targetFuncStartLoc, openMergeStmt);
             for (pair<SourceLocation, string> decisionText : decisionTextList) {
@@ -1387,6 +1389,7 @@ private:
                 InsertTextAfter(decisionText.first, openMergeStmt);
             }
         }
+#endif
     }
 
     // 重置Rewriter，恢复原始文本
@@ -1773,9 +1776,11 @@ public:
             if (varDecl->hasExternalStorage()) {
                 externVariables.insert(varDecl);
             }
-            if (varDecl->hasGlobalStorage() && varDecl->getStorageClass() != StorageClass::SC_Static) {
-                if (insertSymbolicVar(varDecl->getType(), varDecl, false)) {
-                    vars.insert(varDecl->getNameAsString());
+            if (GlobalVarSym) {
+                if (varDecl->hasGlobalStorage() && varDecl->getStorageClass() != StorageClass::SC_Static) {
+                    if (insertSymbolicVar(varDecl->getType(), varDecl, false)) {
+                        vars.insert(varDecl->getNameAsString());
+                    }
                 }
             }
         }
@@ -2277,11 +2282,14 @@ int main(int argc, const char **argv) {
         case TracerXPolicy::Off : searcherStr = "-search="+Searcher+" "; break;
         default : searcherStr = "-search=dfs ";
     }
-    string useMergeStr = EnableMerge?"-use-merge ":"";
 #if CLANG_VERSION == 3
     string IgnorePrintfStr = "";
+    string useMergeStr = "";
 #else
     string IgnorePrintfStr = IgnorePrintf?"-ignore-printf ":"";
+    string useMergeStr = EnableMerge?"-use-merge ":"";
+    // 若启用merge，则interpolation失效
+    if (EnableMerge) tracerXStr = "-no-interpolation ";
 #endif
 
     // 编译生成的代码，然后使用klee符号执行
@@ -2462,32 +2470,32 @@ int main(int argc, const char **argv) {
             fs::path outputPath = rawPath / "Decision";
             copyTestCaseFiles(testCaseFiles, outputPath);
             string decisionCoverageStr = formatDoubleValue((double)decisionGen*100/decisionAll, 2);
-            llvm::errs() << "Decision Coverage : " << decisionCoverageStr << "%\n";
-            coverageMessage += "Decision Coverage : "+decisionCoverageStr+"%\n";
+            llvm::errs() << "Decision Coverage : " << decisionCoverageStr << "%  (" << to_string(decisionGen) << "/" << to_string(decisionAll) << ")\n";
+            coverageMessage += "Decision Coverage : "+decisionCoverageStr+"%  ("+ to_string(decisionGen)+"/"+ to_string(decisionAll)+")\n";
         }
         if (conditionCoverageOutput) {
             vector<fs::path> testCaseFiles = selectCoverageTestCase(testCaseSelectorList, switchTestCaseFile, validTestCase, "condition");
             fs::path outputPath = rawPath / "Condition";
             copyTestCaseFiles(testCaseFiles, outputPath);
             string conditionCoverageStr = formatDoubleValue((double)conditionGen*100/conditionAll, 2);
-            llvm::errs() << "Condition Coverage : " << conditionCoverageStr << "%\n";
-            coverageMessage += "Condition Coverage : "+conditionCoverageStr+"%\n";
+            llvm::errs() << "Condition Coverage : " << conditionCoverageStr << "%  (" << to_string(conditionGen) << "/" << to_string(conditionAll) << ")\n";
+            coverageMessage += "Condition Coverage : "+conditionCoverageStr+"%  ("+ to_string(conditionGen)+"/"+ to_string(conditionAll)+")\n";
         }
         if (CDCOutput) {
             vector<fs::path> testCaseFiles = selectCoverageTestCase(testCaseSelectorList, switchTestCaseFile, validTestCase, "CDC");
             fs::path outputPath = rawPath / "CDC";
             copyTestCaseFiles(testCaseFiles, outputPath);
             string CDCStr = formatDoubleValue((double)CDCGen*100/CDCAll, 2);
-            llvm::errs() << "CDC : " << CDCStr << "%\n";
-            coverageMessage += "CDC : "+CDCStr+"%\n";
+            llvm::errs() << "CDC : " << CDCStr << "%  (" << to_string(CDCGen) << "/" << to_string(CDCAll) << ")\n";
+            coverageMessage += "CDC : "+CDCStr+"%  ("+ to_string(CDCGen)+"/"+ to_string(CDCAll)+")\n";
         }
         if (MCDCOutput) {
             vector<fs::path> testCaseFiles = selectCoverageTestCase(testCaseSelectorList, switchTestCaseFile, validTestCase, "MCDC");
             fs::path outputPath = rawPath / "MCDC";
             copyTestCaseFiles(testCaseFiles, outputPath);
             string MCDCStr = formatDoubleValue((double)MCDCGen*100/MCDCAll, 2);
-            llvm::errs() << "MCDC : " << MCDCStr << "%\n";
-            coverageMessage += "MCDC : "+MCDCStr+"%\n";
+            llvm::errs() << "MCDC : " << MCDCStr << "%  (" << to_string(MCDCGen) << "/" << to_string(MCDCAll) << ")\n";
+            coverageMessage += "MCDC : "+MCDCStr+"%  ("+ to_string(MCDCGen)+"/"+ to_string(MCDCAll)+")\n";
         }
         if (MCCOutput) {
             vector<fs::path> testCaseFiles;
@@ -2500,13 +2508,13 @@ int main(int argc, const char **argv) {
             fs::path outputPath = rawPath / "MCC";
             copyTestCaseFiles(testCaseFiles, outputPath);
             string MCCStr = formatDoubleValue((double)MCCGen*100/MCCAll, 2);
-            llvm::errs() << "MCC : " << MCCStr << "%\n";
-            coverageMessage += "MCC : "+MCCStr+"%\n";
+            llvm::errs() << "MCC : " << MCCStr << "%  (" << to_string(MCCGen) << "/" << to_string(MCCAll) << ")\n";
+            coverageMessage += "MCC : "+MCCStr+"%  ("+ to_string(MCCGen)+"/"+ to_string(MCCAll)+")\n";
         }
         if (SwitchAll != 0) {
             string SwitchStr = formatDoubleValue((double)SwitchGen*100/SwitchAll, 2);
-            llvm::errs() << "Switch : " << SwitchStr << "%\n";
-            coverageMessage += "Switch : "+SwitchStr+"%\n";
+            llvm::errs() << "Switch : " << SwitchStr << "%  (" << to_string(SwitchGen) << "/" << to_string(SwitchAll) << ")\n";
+            coverageMessage += "Switch : "+SwitchStr+"%  ("+ to_string(SwitchGen)+"/"+ to_string(SwitchAll)+")\n";
         }
     }
 
