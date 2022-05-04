@@ -123,6 +123,7 @@ cl::opt<string> Searcher("searcher", cl::desc("Searcher (default=dfs)."), cl::in
 cl::opt<bool> EnableMerge("use-merge", cl::desc("Use KLEE merge (default=false)."), cl::init(false));
 cl::opt<bool> AddIndentation("indentation", cl::desc("Add Indentation (default=true)."), cl::init(true));
 cl::opt<bool> GlobalVarSym("global-var-sym", cl::desc("Make global variable symbolic (default=true)."), cl::init(true));
+cl::opt<bool> GenForAllFunc("all-func", cl::desc("Generate kappa stmt for all function (default=false)."), cl::init(false));
 
 #if CLANG_VERSION == 3
 #else
@@ -1296,6 +1297,8 @@ private:
     int mode;
     string coverage;
     vector<pair<SourceLocation, string>> decisionTextList;
+    vector<pair<SourceLocation, string>> mergeTextList;
+    set<SourceLocation> funcLocSet;
 
     // 将编辑后的内容写入本地
     void writeNewFile(shared_ptr<CustomRewriter> rewriter, string pathString, string coverage, int mode=-1, int count=0) {
@@ -1362,7 +1365,7 @@ private:
         }
 
         // 添加tmp变量定义
-        InsertTextAfter(targetFuncStartLoc, tmpVarDeclStmt);
+        InsertTextAfter(fileStartLoc, tmpVarDeclStmt);
 
         // 删除extern关键词
         for (VarDecl* externVarDel : externVariables) {
@@ -1381,12 +1384,9 @@ private:
         // 添加klee_merge
 #if CLANG_VERSION > 3
         if (EnableMerge) {
-            InsertTextAfter(targetFuncStartLoc, openMergeStmt);
-            for (pair<SourceLocation, string> decisionText : decisionTextList) {
-                if (KappaMode == KappaGeneratePolicy::All && (decisionText == decisionTextList.at(0))) continue;
-                InsertTextAfter(decisionText.first, closeMergeStmt);
-                if ((decisionText == decisionTextList.at(decisionTextList.size()-1))) continue;
-                InsertTextAfter(decisionText.first, openMergeStmt);
+            for (pair<SourceLocation, string> mergeText : mergeTextList) {
+//                if ((mergeText == mergeTextList.at(mergeTextList.size()-1))) continue;
+                InsertTextAfter(mergeText.first, mergeText.second);
             }
         }
 #endif
@@ -1397,6 +1397,8 @@ private:
         rewriter = make_shared<CustomRewriter>();
         rewriter->setSourceMgr(astContext->getSourceManager(), astContext->getLangOpts());
         decisionTextList.clear();
+        mergeTextList.clear();
+        funcLocSet.clear();
         triggerNum = 0;
     }
 
@@ -1541,6 +1543,16 @@ public:
 
         // 添加原decision注释
         addDecisionText(decisionStartLoc, sourceCode.getRewrittenText(decision->getSourceRange()));
+
+        // 添加klee_merge
+        if (funcLocSet.count(declLoc) == 0) {
+            funcLocSet.insert(declLoc);
+            mergeTextList.push_back(make_pair(decisionStartLoc, openMergeStmt));
+        }
+        else {
+            mergeTextList.push_back(make_pair(decisionStartLoc, closeMergeStmt));
+            mergeTextList.push_back(make_pair(decisionStartLoc, openMergeStmt));
+        }
     }
 
     // 添加kappa stmt 单个expect
@@ -1881,10 +1893,21 @@ public:
     }
 
     virtual bool VisitFunctionDecl(FunctionDecl *func) {
-        if (func == targetFuncDecl) {
+        if ((func->isThisDeclarationADefinition() && GenForAllFunc) || func == targetFuncDecl) {
             isTargetFunction = true;
+            if (func->hasBody()) {
+                Stmt *targetFuncBody = func->getBody();
+                if (CompoundStmt *compoundStmt = dyn_cast<CompoundStmt>(targetFuncBody)) {
+                    if (!compoundStmt->body_empty()) {
+                        Stmt *firstStmt = *(compoundStmt->body_begin());
+                        targetFuncStartLoc = firstStmt->getSourceRange().getBegin();
+                    }
+                }
+            }
         }
-        else isTargetFunction = false;
+        else {
+            isTargetFunction = false;
+        }
 
         return true;
     }
@@ -2031,14 +2054,6 @@ public:
             string funcSignText = funcSourceText.substr(0, funcSourceText.find_first_of('{')-1);
             llvm::errs() << "you choose : " << trim(funcSignText) << "\n";
             targetFuncDecl = funcDeclList.at(funcDeclIdx-1);
-        }
-
-        Stmt *targetFuncBody = targetFuncDecl->getBody();
-        if (CompoundStmt *compoundStmt = dyn_cast<CompoundStmt>(targetFuncBody)) {
-            if (!compoundStmt->body_empty()) {
-                Stmt *firstStmt = *(compoundStmt->body_begin());
-                targetFuncStartLoc = firstStmt->getSourceRange().getBegin();
-            }
         }
 
         // 遍历源代码生成驱动函数代码
