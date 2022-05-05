@@ -125,6 +125,7 @@ cl::opt<bool> AddIndentation("indentation", cl::desc("Add Indentation (default=t
 cl::opt<bool> GlobalVarSym("global-var-sym", cl::desc("Make global variable symbolic (default=true)."), cl::init(true));
 cl::opt<bool> GenForAllFunc("all-func", cl::desc("Generate kappa stmt for all function (default=false)."), cl::init(false));
 cl::opt<bool> GenForAllFuncExpectMain("all-func-expect-main", cl::desc("Generate kappa stmt for all function expect main (default=false)."), cl::init(false));
+cl::opt<bool> EarlyStop("early-stop", cl::desc("In decision Mode, Terminate state when reach assert stmt (default=false)."), cl::init(false));
 
 #if CLANG_VERSION == 3
 #else
@@ -1486,7 +1487,7 @@ public:
 #else
         char triggerFuncName[64] = "klee_trigger_if_false";
         char triggerAndTerminateFuncName[64] = "klee_trigger_and_terminate_if_false";
-        char * assertFuncName = KappaMode==KappaGeneratePolicy::All?triggerFuncName:triggerAndTerminateFuncName;
+        char * assertFuncName = (KappaMode==KappaGeneratePolicy::All || (!EarlyStop && KappaMode==KappaGeneratePolicy::Decision))?triggerFuncName:triggerAndTerminateFuncName;
 #endif
 
         // 生成断言语句
@@ -1859,7 +1860,7 @@ private:
 #else
         char triggerFuncName[64] = "klee_trigger_if_false";
         char triggerAndTerminateFuncName[64] = "klee_trigger_and_terminate_if_false";
-        char * assertFuncName = KappaMode==KappaGeneratePolicy::All?triggerFuncName:triggerAndTerminateFuncName;
+        char * assertFuncName = (KappaMode==KappaGeneratePolicy::All || (!EarlyStop && KappaMode==KappaGeneratePolicy::Decision))?triggerFuncName:triggerAndTerminateFuncName;
 #endif
         char buffer[MAX_BUFFER_SIZE];
         rewriterController->addDecisionText(switchStmt->getSourceRange().getBegin(),
