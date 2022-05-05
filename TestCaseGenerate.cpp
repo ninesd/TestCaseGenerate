@@ -124,11 +124,13 @@ cl::opt<bool> EnableMerge("use-merge", cl::desc("Use KLEE merge (default=false).
 cl::opt<bool> AddIndentation("indentation", cl::desc("Add Indentation (default=true)."), cl::init(true));
 cl::opt<bool> GlobalVarSym("global-var-sym", cl::desc("Make global variable symbolic (default=true)."), cl::init(true));
 cl::opt<bool> GenForAllFunc("all-func", cl::desc("Generate kappa stmt for all function (default=false)."), cl::init(false));
+cl::opt<bool> GenForAllFuncExpectMain("all-func-expect-main", cl::desc("Generate kappa stmt for all function expect main (default=false)."), cl::init(false));
 
 #if CLANG_VERSION == 3
 #else
 cl::opt<bool> IgnorePrintf("ignore-printf", cl::desc("Ignore Printf (default=false)."), cl::init(false));
 #endif
+
 
 enum class SearchPolicy {
     Auto,
@@ -150,6 +152,7 @@ cl::opt<SearchPolicy> SearchMode(
 #endif
         cl::init(SearchPolicy::Auto));
 
+
 enum class KappaGeneratePolicy {
     All,
     Decision,
@@ -169,6 +172,7 @@ cl::opt<KappaGeneratePolicy> KappaMode(
         ),
 #endif
         cl::init(KappaGeneratePolicy::Decision));
+
 
 enum class TracerXPolicy {
     On,
@@ -286,6 +290,7 @@ private:
     vector<string> conditions;
     string decision;
     vector<string> testCaseFileNameList;
+    bool afterKlee;
     unsigned int conditionNum;
     int truthTableSeqCnt;
 
@@ -460,7 +465,7 @@ private:
         return result;
     }
 
-    // 贪心求MCDC 添加当前seq可达的其他seq与conditon
+    // 贪心求MCDC 添加当前seq可达的其他seq与condition
     long long matchLinkedSeq(vector<vector<pair<unsigned int, unsigned int> > > &MCDCPairs,
     map<unsigned int, set<unsigned int> > &seqMatch,
             map<pair<unsigned int, unsigned int>, unsigned int> &pairToCondition,
@@ -625,15 +630,15 @@ private:
 
         if (!result.empty()) {
             llvm::errs() << "\nDecision coverage result is :\n";
-            if (!testCaseFileNameList.empty()) messageStr += "\nDecision coverage result is :\n";
+            if (afterKlee) messageStr += "\nDecision coverage result is :\n";
             printCases(result);
         }
         else {
             llvm::errs() << "\nGenerate 0 Decision test case!\n";
-            if (!testCaseFileNameList.empty()) messageStr += "\nGenerate 0 Decision test case!\n";
+            if (afterKlee) messageStr += "\nGenerate 0 Decision test case!\n";
         }
 
-        if (!testCaseFileNameList.empty()) {
+        if (afterKlee) {
             llvm::errs() << "Decision coverage : " << formatDoubleValue((double)result.size()*100/2, 2) << "%\n\n";
             messageStr += "Decision coverage : "+formatDoubleValue((double)result.size()*100/2, 2)+"%\n\n";
             decisionGen += result.size();
@@ -678,12 +683,12 @@ private:
 
         if (!result.empty()) {
             llvm::errs() << "\nCondition coverage result is :\n";
-            if (!testCaseFileNameList.empty()) messageStr += "\nCondition coverage result is :\n";
+            if (afterKlee) messageStr += "\nCondition coverage result is :\n";
             printCases(result);
         }
         else {
             llvm::errs() << "\nGenerate 0 Condition test case!\n";
-            if (!testCaseFileNameList.empty()) messageStr += "\nGenerate 0 Condition test case!\n";
+            if (afterKlee) messageStr += "\nGenerate 0 Condition test case!\n";
         }
 
         int completeConditionNum = 0;
@@ -692,7 +697,7 @@ private:
             if (tmp & 1) completeConditionNum++;
             tmp >>= 1;
         }
-        if (!testCaseFileNameList.empty()) {
+        if (afterKlee) {
             llvm::errs() << "Condition coverage : " << formatDoubleValue((double)completeConditionNum*100/(conditionNum*2), 2) << "%\n\n";
             messageStr += "Condition coverage : "+formatDoubleValue((double)completeConditionNum*100/(conditionNum*2), 2)+"%\n\n";
             conditionGen += completeConditionNum;
@@ -743,12 +748,12 @@ private:
 
         if (!result.empty()) {
             llvm::errs() << "\nCDC result is :\n";
-            if (!testCaseFileNameList.empty()) messageStr += "\nCDC result is :\n";
+            if (afterKlee) messageStr += "\nCDC result is :\n";
             printCases(result);
         }
         else {
             llvm::errs() << "Generate 0 CDC test case!\n";
-            if (!testCaseFileNameList.empty()) messageStr += "\nGenerate 0 CDC test case!\n";
+            if (afterKlee) messageStr += "\nGenerate 0 CDC test case!\n";
         }
 
         int completeConditionNum = 0;
@@ -757,7 +762,7 @@ private:
             if (tmp & 1) completeConditionNum++;
             tmp >>= 1;
         }
-        if (!testCaseFileNameList.empty()) {
+        if (afterKlee) {
             llvm::errs() << "CDC : " << formatDoubleValue((double)completeConditionNum*100/(conditionNum*2+2), 2) << "%\n\n";
             messageStr += "CDC : "+formatDoubleValue((double)completeConditionNum*100/(conditionNum*2+2), 2)+"%\n\n";
             CDCGen += completeConditionNum;
@@ -822,15 +827,15 @@ private:
 
         if (!result.empty()) {
             llvm::errs() << "\nMCDC result is :\n";
-            if (!testCaseFileNameList.empty()) messageStr += "\nMCDC result is :\n";
+            if (afterKlee) messageStr += "\nMCDC result is :\n";
             printCases(result);
         }
         else {
             llvm::errs() << "Generate 0 MCDC test case!\n";
-            if (!testCaseFileNameList.empty()) messageStr += "\nGenerate 0 MCDC test case!\n";
+            if (afterKlee) messageStr += "\nGenerate 0 MCDC test case!\n";
         }
 
-        if (!testCaseFileNameList.empty()) {
+        if (afterKlee) {
             llvm::errs() << "MCDC : " << formatDoubleValue((double)completePairNum*100/conditionNum, 2) << "%\n\n";
             messageStr += "MCDC : "+formatDoubleValue((double)completePairNum*100/conditionNum, 2)+"%\n\n";
             MCDCGen += completePairNum;
@@ -848,36 +853,37 @@ public:
     vector<pair<long long, long long> > MCDCTestCases;
 
     // 通过给定测试用例自动挑选出满足某覆盖率所需的测试用例
-    // conditions表示该decision的condition文本, truthTableSeqCnt表示该decision的真值表条目数量, -1表示没有运行klee, 正数表示运行klee之后挑选
+    // conditions表示该decision的condition文本, truthTableSeqCnt表示该decision的真值表条目数量
     TestCaseSelector(vector<pair<long long, long long> > &trueCases,
                      vector<pair<long long, long long> > &falseCases,
                      vector<string> &conditions,
                      string decision,
                      vector<string> testCaseFileNameList = vector<string>(),
+                     bool afterKlee=false,
                      int truthTableSeqCnt=-1) :
             trueCases(trueCases), falseCases(falseCases), conditions(conditions), decision(decision),
-            testCaseFileNameList(testCaseFileNameList), truthTableSeqCnt(truthTableSeqCnt) {
+            testCaseFileNameList(testCaseFileNameList), afterKlee(afterKlee), truthTableSeqCnt(truthTableSeqCnt) {
 
         addAll(allCases, trueCases);
         addAll(allCases, falseCases);
         conditionNum = conditions.size();
 
         llvm::errs() << "------->>>   " << replaceEnterInStr(decision) << "   <<<-------\n";
-        if (!testCaseFileNameList.empty())
+        if (afterKlee)
             messageStr += "------->>>   "+replaceEnterInStr(decision)+"   <<<-------\n";
 
         if (MCCOutput) {
             if (allCases.size() != 0) {
                 llvm::errs() << "\nMCC result is :\n";
-                if (!testCaseFileNameList.empty()) messageStr += "\nMCC result is :\n";
+                if (afterKlee) messageStr += "\nMCC result is :\n";
                 printCases();
             }
             else {
                 llvm::errs() << "Generate 0 MCC test case!\n";
-                if (!testCaseFileNameList.empty()) messageStr += "\nGenerate 0 MCC test case!\n";
+                if (afterKlee) messageStr += "\nGenerate 0 MCC test case!\n";
             }
 
-            if (!testCaseFileNameList.empty()) {
+            if (afterKlee) {
                 llvm::errs() << "MCC coverage : " << formatDoubleValue((double)allCases.size()*100/truthTableSeqCnt, 2) << "%\n\n";
                 messageStr += "MCC : "+formatDoubleValue((double)allCases.size()*100/truthTableSeqCnt, 2)+"%\n\n";
                 MCCGen += allCases.size();
@@ -886,13 +892,13 @@ public:
         }
 
         if (MCCOutput) MCCTestCases = allCases;
-        if (decisionCoverageOutput && !testCaseFileNameList.empty()) decisionTestCases = calculateDecision();
-        if (conditionCoverageOutput && !testCaseFileNameList.empty()) conditionTestCases = calculateCondition();
-        if (CDCOutput && !testCaseFileNameList.empty()) CDCTestCases = calculateCDC();
-        if (MCDCOutput && !testCaseFileNameList.empty()) MCDCTestCases = calculateMCDC();
+        if (decisionCoverageOutput && afterKlee) decisionTestCases = calculateDecision();
+        if (conditionCoverageOutput && afterKlee) conditionTestCases = calculateCondition();
+        if (CDCOutput && afterKlee) CDCTestCases = calculateCDC();
+        if (MCDCOutput && afterKlee) MCDCTestCases = calculateMCDC();
 
         llvm::errs() << "\n";
-        if (!testCaseFileNameList.empty())
+        if (afterKlee)
             messageStr += "\n";
     }
 };
@@ -963,7 +969,7 @@ private:
         return false;
     }
 
-    // 判断该表达式是否为conditon
+    // 判断该表达式是否为condition
     bool isCondition(Expr *expr) {
         // expr is a binaryOperator
         if (isBoolTypeDeclRef(expr)) return true;
@@ -1893,14 +1899,20 @@ public:
     }
 
     virtual bool VisitFunctionDecl(FunctionDecl *func) {
-        if ((func->isThisDeclarationADefinition() && GenForAllFunc) || func == targetFuncDecl) {
-            isTargetFunction = true;
-            if (func->hasBody()) {
-                Stmt *targetFuncBody = func->getBody();
-                if (CompoundStmt *compoundStmt = dyn_cast<CompoundStmt>(targetFuncBody)) {
-                    if (!compoundStmt->body_empty()) {
-                        Stmt *firstStmt = *(compoundStmt->body_begin());
-                        targetFuncStartLoc = firstStmt->getSourceRange().getBegin();
+        if ((func->isThisDeclarationADefinition() && (GenForAllFunc || GenForAllFuncExpectMain)) || func == targetFuncDecl) {
+            string funcName = func->getName();
+            if (GenForAllFuncExpectMain && funcName.compare("main")==0) {
+                isTargetFunction = false;
+            }
+            else {
+                isTargetFunction = true;
+                if (func->hasBody()) {
+                    Stmt *targetFuncBody = func->getBody();
+                    if (CompoundStmt *compoundStmt = dyn_cast<CompoundStmt>(targetFuncBody)) {
+                        if (!compoundStmt->body_empty()) {
+                            Stmt *firstStmt = *(compoundStmt->body_begin());
+                            targetFuncStartLoc = firstStmt->getSourceRange().getBegin();
+                        }
                     }
                 }
             }
@@ -2474,7 +2486,7 @@ int main(int argc, const char **argv) {
                 else testCaseFileNameList.push_back("");
             }
 
-            TestCaseSelector testCaseSelector(trueTestCase, falseTestCase, conditionTextList.at(i), decisionTextList.at(i), testCaseFileNameList, expect2SeqNumList.at(i).size());
+            TestCaseSelector testCaseSelector(trueTestCase, falseTestCase, conditionTextList.at(i), decisionTextList.at(i), testCaseFileNameList, true, expect2SeqNumList.at(i).size());
             testCaseSelectorList.push_back(testCaseSelector);
         }
 
