@@ -1282,7 +1282,7 @@ const char expectDeclFmt[128] = "long long __expect__%d__%d__%u__ = %lld;\n";
 const char SCMaskDeclFmt[128] = "long long __SCMask__%d__%d__%u__ = %lld;\n";
 const char kappaRstFmt[128] = "(__kappa__%d__ = 0),\n";
 const char kappaCalcFmt[128] = "((__kappa__%d__ |= (1LL*((%s)!=0)<<%d)), (__kappa__%d__ & 1LL<<%d)!=0)\n";
-const char decisionReplaceFmt[128] = "%s(__dv__ = %s),\n%s__dv__";
+const char decisionReplaceFmt[128] = "(%s(__dv__ = %s),\n%s__dv__)";
 
 const char kappaMatchFmt[128] = "%s((__kappa__%d__ ^ __expect__%d__%d__%u__) & __SCMask__%d__%d__%u__),\n";
 const char switchMatchFmt[128] = "%s(%d*0);\n";
@@ -1925,16 +1925,6 @@ public:
         return true;
     }
 
-    virtual bool VisitExpr(Expr *expr) {
-
-        return true;
-    }
-
-    virtual bool VisitConditionalOperator (ConditionalOperator  *co) {
-
-        return true;
-    }
-
     virtual bool VisitStmt(Stmt *st) {
         if (!isTargetFunction) return true;
 
@@ -1957,6 +1947,10 @@ public:
         }
         if (ForStmt *forStmt = dyn_cast<ForStmt>(st)) {
             insertKappaStmt(forStmt->getCond(), targetFuncStartLoc, forStmt->getSourceRange().getBegin(), forStmt->getCond()->getSourceRange(), decisionCount, true);
+            decisionCount++;
+        }
+        if (ConditionalOperator *coStmt = dyn_cast<ConditionalOperator>(st)) {
+            insertKappaStmt(coStmt->getCond(), targetFuncStartLoc, coStmt->getSourceRange().getBegin(), coStmt->getCond()->getSourceRange(), decisionCount);
             decisionCount++;
         }
         if (SwitchStmt *switchStmt = dyn_cast<SwitchStmt>(st)) {
