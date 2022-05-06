@@ -1925,6 +1925,16 @@ public:
         return true;
     }
 
+    virtual bool VisitExpr(Expr *expr) {
+
+        return true;
+    }
+
+    virtual bool VisitConditionalOperator (ConditionalOperator  *co) {
+
+        return true;
+    }
+
     virtual bool VisitStmt(Stmt *st) {
         if (!isTargetFunction) return true;
 
