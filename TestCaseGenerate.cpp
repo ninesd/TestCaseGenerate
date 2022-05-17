@@ -126,6 +126,7 @@ cl::opt<bool> GlobalVarSym("global-var-sym", cl::desc("Make global variable symb
 cl::opt<bool> GenForAllFunc("all-func", cl::desc("Generate kappa stmt for all function (default=false)."), cl::init(false));
 cl::opt<bool> GenForAllFuncExpectMain("all-func-expect-main", cl::desc("Generate kappa stmt for all function expect main (default=false)."), cl::init(false));
 cl::opt<bool> EarlyStop("early-stop", cl::desc("In decision Mode, Terminate state when reach assert stmt (default=false)."), cl::init(false));
+cl::opt<bool> NoneOpt("none-opt", cl::desc("Disable clang opt (default=false)."), cl::init(false));
 
 #if CLANG_VERSION == 3
 #else
@@ -1283,8 +1284,7 @@ const char SCMaskDeclFmt[128] = "long long __SCMask__%d__%d__%u__ = %lld;\n";
 const char kappaRstFmt[128] = "(__kappa__%d__ = 0),\n";
 const char kappaCalcFmt[128] = "((__kappa__%d__ |= (1LL*((%s)!=0)<<%d)), (__kappa__%d__ & 1LL<<%d)!=0)\n";
 const char decisionReplaceFmt[128] = "(%s(__dv__ = %s),\n%s__dv__)";
-
-const char kappaMatchFmt[128] = "%s((__kappa__%d__ ^ __expect__%d__%d__%u__) & __SCMask__%d__%d__%u__),\n";
+const char kappaMatchFmt[128] = "%s(__kappa__%d__ != __expect__%d__%d__%u__),\n";
 const char switchMatchFmt[128] = "%s(%d*0);\n";
 
 string openMergeStmt = "\nklee_open_merge();\n";
@@ -1472,7 +1472,8 @@ public:
     // 添加kappa stmt
     void editRewriter(Expr *decision, vector<Expr*> &conditions, vector<pair<long long, long long> > &expect,
                       map<pair<long long, long long>, unsigned int> &expect2SeqNum,
-                      SourceLocation declLoc, SourceLocation decisionStartLoc, SourceRange decisionSourceRange, int decisionCount, unsigned int trueCaseNum, bool isLoop=false) {
+                      SourceLocation declLoc, SourceLocation decisionStartLoc, SourceRange decisionSourceRange,
+                      int decisionCount, unsigned int trueCaseNum, bool isLoop=false) {
         char buffer[MAX_BUFFER_SIZE];
 
         // 替换condition
@@ -1504,11 +1505,9 @@ public:
                     assertFuncName = triggerAndTerminateFuncName;
             }
 #endif
-            sprintf(buffer, kappaMatchFmt, assertFuncName, decisionCount, decisionCount, i, expect2SeqNum[expect.at(i)],
-                    decisionCount, i, expect2SeqNum[expect.at(i)]);
+            sprintf(buffer, kappaMatchFmt, assertFuncName, decisionCount, decisionCount, i, expect2SeqNum[expect.at(i)]);
             kappaMatchStmt += buffer;
         }
-
         // 替换整个decision
         char kappaRstStmt[MAX_BUFFER_SIZE];
         sprintf(kappaRstStmt, kappaRstFmt, decisionCount);
@@ -1541,7 +1540,7 @@ public:
             valueComment += "\n";
             InsertTextAfter(declLoc, valueComment);
 
-            sprintf(buffer, expectDeclFmt, decisionCount, i, expect2SeqNum[expect.at(i)], expect.at(i).first);
+            sprintf(buffer, expectDeclFmt, decisionCount, i, expect2SeqNum[expect.at(i)], expect.at(i).first & expect.at(i).second);
             InsertTextAfter(declLoc, buffer);
 
             sprintf(buffer, SCMaskDeclFmt, decisionCount, i, expect2SeqNum[expect.at(i)], expect.at(i).second);
@@ -2329,6 +2328,7 @@ int main(int argc, const char **argv) {
         string emitAllErrorsStr = EmitAllErrors?"-emit-all-errors ":"";
         // Kappa生成策略为在同一个文件中生成所有decision的Kappa时，需要-emit-all-errors-in-same-path参数保证路径触发断言后不会停止
         string emitAllErrorsInSamePathStr = (KappaMode == KappaGeneratePolicy::All)?"-emit-all-errors-in-same-path ":"";
+        string noneOptStr = NoneOpt?"-Xclang -disable-O0-optnone ":"";
         string shellScriptStr =
                 "cd "+rawPath.string()+"\n"
                 "for mode in `ls -1 | grep "+KappaSubDirNameStr+"`; \n"
@@ -2338,9 +2338,9 @@ int main(int argc, const char **argv) {
                 "        for sourceFile in `ls -v kappa-*.c`;\n"
                 "        do\n"
 #if CLANG_VERSION == 3
-                "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -emit-llvm -g $sourceFile\n"
+                "            "+ClangPath+" "+kleeIncludeDir+"-c -Wno-implicit-function-declaration -O0 -emit-llvm -g $sourceFile\n"
 #else
-                "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -Xclang -disable-O0-optnone -emit-llvm -gline-tables-only $sourceFile\n"
+                "            "+ClangPath+" "+kleeIncludeDir+"-c -Wno-implicit-function-declaration -O0"+noneOptStr+" -emit-llvm -gline-tables-only $sourceFile\n"
 #endif
                 "            triggerNum=$(grep 'klee_trigger' $sourceFile | wc -l)\n"
                 "            "+KleePath+" -max-memory=64000 -solver-backend=z3 "
@@ -2408,11 +2408,11 @@ int main(int argc, const char **argv) {
         map<unsigned int, fs::path> switchTestCaseFile;
 
 #ifndef TRIGGER
-        boost::regex seqIdxReg("Error: ASSERTION FAIL: \\(__kappa__(.+)__ \\^ __expect__(.+)__(.+)__(.+)__\\) & __SCMask__(.+)__(.+)__(.+)__");
+        boost::regex seqIdxReg("Error: ASSERTION FAIL: __kappa__(.+)__ != __expect__(.+)__(.+)__(.+)__");
         boost::regex switchSeqIdxReg("Error: ASSERTION FAIL: (.+)\\*0");
         string fileSuffix = ".assert.err";
 #else
-        boost::regex seqIdxReg("Error: TRIGGER: \\(__kappa__(.+)__ \\^ __expect__(.+)__(.+)__(.+)__\\) & __SCMask__(.+)__(.+)__(.+)__");
+        boost::regex seqIdxReg("Error: TRIGGER: __kappa__(.+)__ != __expect__(.+)__(.+)__(.+)__");
         boost::regex switchSeqIdxReg("Error: TRIGGER: (.+)\\*0");
         string fileSuffix = ".trigger.err";
 #endif
