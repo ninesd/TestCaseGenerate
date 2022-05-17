@@ -127,6 +127,7 @@ cl::opt<bool> GenForAllFunc("all-func", cl::desc("Generate kappa stmt for all fu
 cl::opt<bool> GenForAllFuncExpectMain("all-func-expect-main", cl::desc("Generate kappa stmt for all function expect main (default=false)."), cl::init(false));
 cl::opt<bool> EarlyStop("early-stop", cl::desc("In decision Mode, Terminate state when reach assert stmt (default=false)."), cl::init(false));
 cl::opt<bool> NoneOpt("none-opt", cl::desc("Disable clang opt (default=false)."), cl::init(false));
+cl::opt<bool> Optimize("optimize", cl::desc("Enable klee optimize (default=false)."), cl::init(false));
 
 #if CLANG_VERSION == 3
 #else
@@ -1277,13 +1278,14 @@ string kleeInclude = "#include <klee/klee.h>\n";
 // 每一位表示一个condition
 // expect表示期望的输出 为0表示该位为false 为1表示该位为true
 // SCMask表示哪些位是被短路的 为1表示该位没有被短路 为0表示该位被短路
-string tmpVarDeclStmt = "\nint __dv__;\n";
+string tmpVarDeclStmt = "\nint __Cond_Value__;\n";
 const char kappaDeclFmt[128] = "long long __kappa__%d__;\n";
-const char expectDeclFmt[128] = "long long __expect__%d__%d__%u__ = %lld;\n";
-const char SCMaskDeclFmt[128] = "long long __SCMask__%d__%d__%u__ = %lld;\n";
+const char expectDeclFmt[128] = "#define __expect__%d__%d__%u__ %lld\n";
+const char SCMaskDeclFmt[128] = "#define __SCMask__%d__%d__%u__ %lld\n";
 const char kappaRstFmt[128] = "(__kappa__%d__ = 0),\n";
 const char kappaCalcFmt[128] = "((__kappa__%d__ |= (1LL*((%s)!=0)<<%d)), (__kappa__%d__ & 1LL<<%d)!=0)\n";
-const char decisionReplaceFmt[128] = "(%s(__dv__ = %s),\n%s__dv__)";
+const char decisionReplaceFmt[128] = "(%s(__Cond_Value__ = %s),\n%s__Cond_Value__)";
+
 const char kappaMatchFmt[128] = "%s(__kappa__%d__ != __expect__%d__%d__%u__),\n";
 const char switchMatchFmt[128] = "%s(%d*0);\n";
 
@@ -1505,6 +1507,7 @@ public:
                     assertFuncName = triggerAndTerminateFuncName;
             }
 #endif
+
             sprintf(buffer, kappaMatchFmt, assertFuncName, decisionCount, decisionCount, i, expect2SeqNum[expect.at(i)]);
             kappaMatchStmt += buffer;
         }
@@ -2329,6 +2332,7 @@ int main(int argc, const char **argv) {
         // Kappa生成策略为在同一个文件中生成所有decision的Kappa时，需要-emit-all-errors-in-same-path参数保证路径触发断言后不会停止
         string emitAllErrorsInSamePathStr = (KappaMode == KappaGeneratePolicy::All)?"-emit-all-errors-in-same-path ":"";
         string noneOptStr = NoneOpt?"-Xclang -disable-O0-optnone ":"";
+        string optStr = Optimize?"-optimize ":"";
         string shellScriptStr =
                 "cd "+rawPath.string()+"\n"
                 "for mode in `ls -1 | grep "+KappaSubDirNameStr+"`; \n"
@@ -2353,7 +2357,7 @@ int main(int argc, const char **argv) {
 #else
                 "-trigger-times=$triggerNum -only-output-trigger "
 #endif
-                +searcherStr+useMergeStr+emitAllErrorsStr+IgnorePrintfStr+tracerXStr+"${sourceFile%.c}.bc\n"
+                +searcherStr+useMergeStr+emitAllErrorsStr+IgnorePrintfStr+tracerXStr+optStr+"${sourceFile%.c}.bc\n"
                 "        done\n"
                 "        cd ../\n"
                 "    fi\n"
