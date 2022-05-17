@@ -2340,7 +2340,7 @@ int main(int argc, const char **argv) {
 #if CLANG_VERSION == 3
                 "            "+ClangPath+" "+kleeIncludeDir+"-c -Wno-implicit-function-declaration -O0 -emit-llvm -g $sourceFile\n"
 #else
-                "            "+ClangPath+" "+kleeIncludeDir+"-c -Wno-implicit-function-declaration -O0"+noneOptStr+" -emit-llvm -gline-tables-only $sourceFile\n"
+                "            "+ClangPath+" "+kleeIncludeDir+"-c -Wno-implicit-function-declaration -O0 "+noneOptStr+"-emit-llvm -gline-tables-only $sourceFile\n"
 #endif
                 "            triggerNum=$(grep 'klee_trigger' $sourceFile | wc -l)\n"
                 "            "+KleePath+" -max-memory=64000 -solver-backend=z3 "
