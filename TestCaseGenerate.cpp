@@ -126,8 +126,8 @@ cl::opt<bool> GlobalVarSym("global-var-sym", cl::desc("Make global variable symb
 cl::opt<bool> GenForAllFunc("all-func", cl::desc("Generate kappa stmt for all function (default=false)."), cl::init(false));
 cl::opt<bool> GenForAllFuncExpectMain("all-func-expect-main", cl::desc("Generate kappa stmt for all function expect main (default=false)."), cl::init(false));
 cl::opt<bool> EarlyStop("early-stop", cl::desc("In decision Mode, Terminate state when reach assert stmt (default=false)."), cl::init(false));
-cl::opt<bool> NoneOpt("none-opt", cl::desc("Disable clang opt (default=false)."), cl::init(false));
-cl::opt<bool> Optimize("optimize", cl::desc("Enable klee optimize (default=false)."), cl::init(false));
+cl::opt<bool> NoneOpt("none-opt", cl::desc("Disable clang opt (default=true)."), cl::init(true));
+cl::opt<bool> Optimize("optimize", cl::desc("Enable klee optimize (default=true)."), cl::init(true));
 
 #if CLANG_VERSION == 3
 #else
@@ -2305,7 +2305,7 @@ int main(int argc, const char **argv) {
     string kleeIncludeDir = (KleeIncludePath=="")?"":"-I "+KleeIncludePath+" ";
     string tracerXStr;
     switch (TracerX) {
-        case TracerXPolicy::On : tracerXStr = "-wp-interpolant "; break;
+        case TracerXPolicy::On : tracerXStr = " "; break;
 //        case TracerXPolicy::On : tracerXStr = "-debug-subsumption=2 "; break;
         case TracerXPolicy::Off : tracerXStr = "-no-interpolation "; break;
         default : tracerXStr = "";
