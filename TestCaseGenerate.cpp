@@ -1005,24 +1005,24 @@ private:
                 return false;
             }
         }
-        // ParenExpr 括号
+            // ParenExpr 括号
         else if (ParenExpr *parenExpr = dyn_cast<ParenExpr>(expr)) {
             if (DEBUG) llvm::errs() << "ParenExpr : " << sourceCode.getRewrittenText(expr->getSourceRange()) << "\n";
             return travelExpr(parenExpr->getSubExpr(), node);
         }
-        // CastExpr 类型转换
+            // CastExpr 类型转换
         else if (CastExpr *castExpr = dyn_cast<CastExpr>(expr)) {
             if (DEBUG) llvm::errs() << "CastExpr : " << sourceCode.getRewrittenText(expr->getSourceRange()) << "\n";
             return travelExpr(castExpr->getSubExpr(), node);
         }
-        // condition
+            // condition
         else if (isCondition(expr)) {
             if (DEBUG) llvm::errs() << "Condition : " << sourceCode.getRewrittenText(expr->getSourceRange()) << "\n";
             node->conditionNum = conditions.size();
             conditions.push_back(expr);
             return true;
         }
-        // dividable 二元运算符
+            // dividable 二元运算符
         else if (BinaryOperator *binaryOperator = dyn_cast<BinaryOperator>(expr)) {
             if (DEBUG) llvm::errs() << "BinaryOperator : " << sourceCode.getRewrittenText(expr->getSourceRange()) <<
                                     "\nLHS : " << sourceCode.getRewrittenText(binaryOperator->getLHS()->getSourceRange()) << "    RHS : " <<
@@ -1046,14 +1046,14 @@ private:
             bool rhs = travelExpr(binaryOperator->getRHS(), node->right);
             return lhs && rhs;
         }
-        // 单独的值 e.g. if(tmp)
+            // 单独的值 e.g. if(tmp)
         else if (isa<DeclRefExpr>(expr)) {
             if (DEBUG) llvm::errs() << "Condition : " << sourceCode.getRewrittenText(expr->getSourceRange()) << "\n";
             node->conditionNum = conditions.size();
             conditions.push_back(expr);
             return true;
         }
-        // 函数调用 e.g. if(func(tmp))
+            // 函数调用 e.g. if(func(tmp))
         else if (isa<CallExpr>(expr)) {
             if (DEBUG) llvm::errs() << "Function Call : " << sourceCode.getRewrittenText(expr->getSourceRange()) << "\n";
             node->conditionNum = conditions.size();
@@ -1136,7 +1136,7 @@ private:
                 // FXF
                 addAll(node->MCCFalseCase, node->left->MCCFalseCase);
             }
-            // 该节点需要做或运算
+                // 该节点需要做或运算
             else if ((node->op & OR) != 0) {
                 // TXT
                 addAll(node->MCCTrueCase, node->left->MCCTrueCase);
@@ -1151,7 +1151,7 @@ private:
                     }
                 }
             }
-            // 该节点需要做异或运算
+                // 该节点需要做异或运算
             else {
                 for (pair<long long, long long> leftFalse : node->left->MCCFalseCase) {
                     // FTT
@@ -1438,7 +1438,7 @@ private:
         while (enterLoc != string::npos && enterLoc != 0) {
             enterLoc = str.rfind("\n", enterLoc-1);
             if (enterLoc != string::npos &&
-            (enterLoc==str.size()-1 || (str.at(enterLoc+1)!=' ' && str.at(enterLoc+1)!='\t'))) {
+                (enterLoc==str.size()-1 || (str.at(enterLoc+1)!=' ' && str.at(enterLoc+1)!='\t'))) {
                 str.insert(enterLoc+1, indentation);
             }
         }
@@ -1502,7 +1502,7 @@ public:
                 // 逻辑表达式值为真，循环没有结束，需要继续运行
                 if (i < trueCaseNum)
                     assertFuncName = triggerFuncName;
-                // 逻辑表达式值为假，循环结束，提前结束运行
+                    // 逻辑表达式值为假，循环结束，提前结束运行
                 else
                     assertFuncName = triggerAndTerminateFuncName;
             }
@@ -1675,7 +1675,7 @@ private:
             if (NULL != type->getPointeeCXXRecordDecl()) {
                 llvm::errs() << "WARNING : [" << varType << "] " << varName << " is a PointerType pointing to c++ struct/union/class!\n";
             }
-            // 先定义指针指向的变量，再将指针变量赋值
+                // 先定义指针指向的变量，再将指针变量赋值
             else {
                 if (!pointeeType.getTypePtr()->getUnqualifiedDesugaredType()->isFundamentalType()) {
                     llvm::errs() << "WARNING : [" << varType << "] " << varName << " is not a support type variable!\n";
@@ -1829,7 +1829,7 @@ private:
         }
         else
 #ifndef TRIGGER
-        if (KappaMode == KappaGeneratePolicy::Decision && !isLoop) {
+            if (KappaMode == KappaGeneratePolicy::Decision && !isLoop) {
             triggerNum += expect2SeqNum.size();
             rewriterController->editRewriter(decision, leTree->conditions, leTree->MCCExpect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
             rewriterController->writeResult();
@@ -2054,7 +2054,7 @@ public:
         if (funcDeclList.size() == 1) {
             targetFuncDecl = funcDeclList.at(0);
         }
-        // 找到了不止一个符合该名称的函数
+            // 找到了不止一个符合该名称的函数
         else {
             llvm::errs() << "found " << funcDeclList.size() << " functions named " << targetFuncName << ":\n";
             for (unsigned int i=0; i<funcDeclList.size(); i++) {
@@ -2326,13 +2326,9 @@ int main(int argc, const char **argv) {
     if (EnableMerge) tracerXStr = "-no-interpolation ";
 #endif
 
-    // 编译生成的代码，然后使用klee符号执行
+    // 编译生成的代码
     if (runKlee && (conditionCoverageOutput || decisionCoverageOutput || CDCOutput || MCCOutput || MCDCOutput)) {
-        string emitAllErrorsStr = EmitAllErrors?"-emit-all-errors ":"";
-        // Kappa生成策略为在同一个文件中生成所有decision的Kappa时，需要-emit-all-errors-in-same-path参数保证路径触发断言后不会停止
-        string emitAllErrorsInSamePathStr = (KappaMode == KappaGeneratePolicy::All)?"-emit-all-errors-in-same-path ":"";
         string noneOptStr = NoneOpt?"-Xclang -disable-O0-optnone ":"";
-        string optStr = Optimize?"-optimize ":"";
         string shellScriptStr =
                 "cd "+rawPath.string()+"\n"
                 "for mode in `ls -1 | grep "+KappaSubDirNameStr+"`; \n"
@@ -2346,6 +2342,56 @@ int main(int argc, const char **argv) {
 #else
                 "            "+ClangPath+" "+kleeIncludeDir+"-c -Wno-implicit-function-declaration -O0 "+noneOptStr+"-emit-llvm -gline-tables-only $sourceFile\n"
 #endif
+                "        done\n"
+                "        cd ../\n"
+                "    fi\n"
+                "done";
+
+        int returnCode = system(shellScriptStr.c_str());
+        if (returnCode==-1) llvm::errs() << "Run Klee ERROR!\n";
+    }
+
+    if (statementCoverageOutput) {
+        fs::path statementOutputPath = rawPath / "Statement";
+        string shellScriptStr =
+                "cd "+statementOutputPath.string()+"\n"
+                "for sourceFile in `ls -v *.c`;\n"
+                "do\n"
+                "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -emit-llvm -g $sourceFile\n"
+                "done\n";
+        int returnCode = system(shellScriptStr.c_str());
+        if (returnCode==-1) llvm::errs() << "Run Klee ERROR!\n";
+    }
+
+    if (pathCoverageOutput) {
+        fs::path statementOutputPath = rawPath / "Path";
+        string shellScriptStr =
+                "cd "+statementOutputPath.string()+"\n"
+                "for sourceFile in `ls -v *.c`;\n"
+                "do\n"
+                "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -emit-llvm -g $sourceFile\n"
+                "done\n";
+        int returnCode = system(shellScriptStr.c_str());
+        if (returnCode==-1) llvm::errs() << "Run Klee ERROR!\n";
+    }
+
+    struct timeval timeCodeCompliedEnd;
+    gettimeofday(&timeCodeCompliedEnd,NULL);
+
+    // 运行klee
+    if (runKlee && (conditionCoverageOutput || decisionCoverageOutput || CDCOutput || MCCOutput || MCDCOutput)) {
+        string emitAllErrorsStr = EmitAllErrors?"-emit-all-errors ":"";
+        // Kappa生成策略为在同一个文件中生成所有decision的Kappa时，需要-emit-all-errors-in-same-path参数保证路径触发断言后不会停止
+        string emitAllErrorsInSamePathStr = (KappaMode == KappaGeneratePolicy::All)?"-emit-all-errors-in-same-path ":"";
+        string optStr = Optimize?"-optimize ":"";
+        string shellScriptStr =
+                "cd "+rawPath.string()+"\n"
+                "for mode in `ls -1 | grep "+KappaSubDirNameStr+"`; \n"
+                "do   \n"
+                "    if [ -d \"$mode\" ]; then\n"
+                "        cd $mode\n"
+                "        for sourceFile in `ls -v kappa-*.c`;\n"
+                "        do\n"
                 "            triggerNum=$(grep 'klee_trigger' $sourceFile | wc -l)\n"
                 "            "+KleePath+" -max-memory=64000 -solver-backend=z3 "
                 "-dump-states-on-halt=false "
@@ -2362,6 +2408,7 @@ int main(int argc, const char **argv) {
                 "        cd ../\n"
                 "    fi\n"
                 "done";
+
         int returnCode = system(shellScriptStr.c_str());
         if (returnCode==-1) llvm::errs() << "Run Klee ERROR!\n";
     }
@@ -2372,13 +2419,12 @@ int main(int argc, const char **argv) {
                 "cd "+statementOutputPath.string()+"\n"
                 "for sourceFile in `ls -v *.c`;\n"
                 "do\n"
-                "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -emit-llvm -g $sourceFile\n"
                 "            "+KleePath+" --max-memory=64000 -solver-backend=z3 --search=dfs "
 #if CLANG_VERSION == 3
                 "-allow-external-sym-calls -no-interpolation"
 #endif
                 "-dump-states-on-halt=0 --only-output-states-covering-new "+IgnorePrintfStr+"${sourceFile%.c}.bc\n"
-                "done\n";
+                                                                                                                                                                                                   "done\n";
         int returnCode = system(shellScriptStr.c_str());
         if (returnCode==-1) llvm::errs() << "Run Klee ERROR!\n";
     }
@@ -2389,13 +2435,12 @@ int main(int argc, const char **argv) {
                 "cd "+statementOutputPath.string()+"\n"
                 "for sourceFile in `ls -v *.c`;\n"
                 "do\n"
-                "            "+ClangPath+" "+kleeIncludeDir+"-c -O0 -emit-llvm -g $sourceFile\n"
                 "            "+KleePath+" --max-memory=64000 -solver-backend=z3 --search=dfs "
 #if CLANG_VERSION == 3
                 "-allow-external-sym-calls -no-interpolation"
 #endif
                 "-dump-states-on-halt=0 "+IgnorePrintfStr+"${sourceFile%.c}.bc\n"
-                "done\n";
+                                                                                                                                                                 "done\n";
         int returnCode = system(shellScriptStr.c_str());
         if (returnCode==-1) llvm::errs() << "Run Klee ERROR!\n";
     }
@@ -2559,17 +2604,18 @@ int main(int argc, const char **argv) {
 
 #define getTimeUsed(timeEnd, timeStart) (timeEnd.tv_sec - timeStart.tv_sec) + (double)(timeEnd.tv_usec - timeStart.tv_usec)/1000000.0
     string totalTimeStr = "Total time(sec)     : "+formatDoubleValue(getTimeUsed(timeAllEnd, timeStart), 4)+"\n";
-    string preKleeTimeStr = "Pre KLEE time(sec)  : "+formatDoubleValue(getTimeUsed(timeCodeGenerationEnd, timeStart), 4)+"\n";
-    string kleeTimeStr = "KLEE time(sec)      : "+formatDoubleValue(getTimeUsed(timeKleeEnd, timeCodeGenerationEnd), 4)+"\n";
-    string postKleeTimeStr = "Post KLEE time(sec) : "+formatDoubleValue(getTimeUsed(timeAllEnd, timeKleeEnd), 4)+"\n";
+    string preProcessTimeStr = "PreProcess time(sec)  : "+formatDoubleValue(getTimeUsed(timeCodeGenerationEnd, timeStart), 4)+"\n";
+    string clangTimeStr = "Clang time(sec)  : "+formatDoubleValue(getTimeUsed(timeCodeCompliedEnd, timeCodeGenerationEnd), 4)+"\n";
+    string kleeTimeStr = "KLEE time(sec)      : "+formatDoubleValue(getTimeUsed(timeKleeEnd, timeCodeCompliedEnd), 4)+"\n";
+    string postProcessTimeStr = "PostProcess time(sec) : "+formatDoubleValue(getTimeUsed(timeAllEnd, timeKleeEnd), 4)+"\n";
 #undef getTimeUsed
 
-    llvm::errs() << "\n" << totalTimeStr << preKleeTimeStr << kleeTimeStr << postKleeTimeStr << "\n";
+    llvm::errs() << "\n" << totalTimeStr << preProcessTimeStr << clangTimeStr << kleeTimeStr << postProcessTimeStr << "\n";
 
     fs::path messageOutPath = rawPath / "message.txt";
     ofstream fOut(messageOutPath.string());
     fOut << coverageMessage << "\n\n";
-    fOut << totalTimeStr << preKleeTimeStr << kleeTimeStr << postKleeTimeStr << "\n\n";
+    fOut << totalTimeStr << preProcessTimeStr << clangTimeStr << kleeTimeStr << postProcessTimeStr << "\n\n";
     fOut << messageStr << "\n\n";
     fOut.close();
 
