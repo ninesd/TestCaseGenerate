@@ -25,6 +25,7 @@ export CPLUS_INCLUDE_PATH=/home/issta21-322/TracerX/tracerx/include:$CPLUS_INCLU
 
 ~/klee/TestCaseGenerate/build/TestCaseGenerate test.c -MCC -condition -decision -CDC -MCDC -kappa-mode=a -tracerx=off -func=func1 --
 
+CLANG_VERSION宏定义为9适合klee2.2（即现在我用的支持浮点的版本），改为3适合tracerx原版
 
 参数解释：
 test.c 表示要测试的文件，一次只能有一个
