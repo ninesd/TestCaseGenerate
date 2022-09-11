@@ -81,6 +81,13 @@ vector<int> triggerNumSet;
 // 记录找到的所有extern变量
 set<VarDecl*> externVariables;
 
+int EnableSpecPath = 0;
+vector<vector<int> > specifiedPath;
+vector<vector<int> > switchPath;
+int pathCount = 0;
+int specifiedPathCount = 0;
+int switchPathCount = 0;
+
 // buffer数组的最大长度
 #define MAX_BUFFER_SIZE 10240
 
@@ -126,8 +133,10 @@ cl::opt<bool> GlobalVarSym("global-var-sym", cl::desc("Make global variable symb
 cl::opt<bool> GenForAllFunc("all-func", cl::desc("Generate kappa stmt for all function (default=false)."), cl::init(false));
 cl::opt<bool> GenForAllFuncExpectMain("all-func-expect-main", cl::desc("Generate kappa stmt for all function expect main (default=false)."), cl::init(false));
 cl::opt<bool> EarlyStop("early-stop", cl::desc("In decision Mode, Terminate state when reach assert stmt (default=false)."), cl::init(false));
-cl::opt<bool> NoneOpt("none-opt", cl::desc("Disable clang opt (default=true)."), cl::init(true));
+cl::opt<bool> NoneOpt("none-opt", cl::desc("Disable clang opt (default=true)."), cl::init(false));
 cl::opt<bool> Optimize("optimize", cl::desc("Enable klee optimize (default=true)."), cl::init(true));
+
+cl::opt<string> SpecPath("specPath", cl::desc("Specify path."), cl::init(""));
 
 #if CLANG_VERSION == 3
 #else
@@ -1292,6 +1301,16 @@ const char switchMatchFmt[128] = "%s(%d*0);\n";
 string openMergeStmt = "\nklee_open_merge();\n";
 string closeMergeStmt = "\nklee_close_merge();\n";
 
+const char expectPathStmt[128] = "#define __expect__%d__%d %d\n";
+const char expectSwitchPathStmt[128] = "#define __expect_s__%d__%d %d\n";
+const char pathStmt[128] = "int __path__%d = -1;\n";
+const char switchPathStmt[128] = "int __path_s__%d = -1;\n";
+const char pathRecordStmt[128] = "__path__%d = __Cond_Value__,\n";
+const char switchPathRecordStmt[128] = "__path_s__%d = %d;\n";
+const char wholePathMatchStmt[128] = "%s(!(%s));\n";
+const char pathMatchStmt[128] = "(__path__%d == __expect__%d__%d)";
+const char switchPathMatchStmt[128] = "(__path_s__%d == __expect_s__%d__%d)";
+
 #define MODE_ALL 3
 #define MODE_DEC 2
 #define MODE_SEQ 1
@@ -1352,6 +1371,37 @@ private:
             InsertTextAfter(fileStartLoc, kleeInclude);
         }
 
+        // 添加path断言
+        if (EnableSpecPath) {
+            string pathMatchString;
+            char buffer[MAX_BUFFER_SIZE];
+#ifndef TRIGGER
+            char assertFuncName[64] = "klee_assert";
+#else
+            char assertFuncName[64] = "klee_trigger_if_false";
+#endif
+
+            for (int j=0; j<pathCount; j++) {
+                pathMatchString = "";
+                for (int i=0; i<specifiedPathCount; i++) {
+                    if (specifiedPath.at(j).at(i) == -2) continue;
+                    sprintf(buffer, pathMatchStmt, i, j, i);
+                    if (pathMatchString != "") pathMatchString += " && ";
+                    pathMatchString += buffer;
+                }
+                for (int i=0; i<switchPathCount; i++) {
+                    if (switchPath.at(j).at(i) == -2) continue;
+                    sprintf(buffer, switchPathMatchStmt, i, j, i);
+                    if (pathMatchString != "") pathMatchString += " && ";
+                    pathMatchString += buffer;
+                }
+                sprintf(buffer, wholePathMatchStmt, assertFuncName, pathMatchString.c_str());
+
+                makeSymbolicStmt += "    ";
+                makeSymbolicStmt += buffer;
+            }
+        }
+
         // 添加驱动函数文本
         if (addDriverFunc) {
             if (targetFuncName.compare("main")==0) {
@@ -1399,6 +1449,31 @@ private:
             }
         }
 #endif
+
+        // 添加path定义
+        if (EnableSpecPath) {
+            char buffer[MAX_BUFFER_SIZE];
+            for (int j=0; j<pathCount; j++) {
+                for (int i=0; i<specifiedPathCount; i++) {
+                    if (i > specifiedPath.at(j).size()) llvm::errs() << "SpecPath Str ERROR!";
+                    sprintf(buffer, expectPathStmt, j, i, specifiedPath.at(j).at(i));
+                    InsertTextAfter(fileStartLoc, buffer);
+                }
+                for (int i=0; i<switchPathCount; i++) {
+                    if (i > switchPath.at(j).size()) llvm::errs() << "SpecPath Str ERROR!";
+                    sprintf(buffer, expectSwitchPathStmt, j, i, switchPath.at(j).at(i));
+                    InsertTextAfter(fileStartLoc, buffer);
+                }
+            }
+            for (int i=0; i<specifiedPathCount; i++) {
+                sprintf(buffer, pathStmt, i);
+                InsertTextAfter(fileStartLoc, buffer);
+            }
+            for (int i=0; i<switchPathCount; i++) {
+                sprintf(buffer, switchPathStmt, i);
+                InsertTextAfter(fileStartLoc, buffer);
+            }
+        }
     }
 
     // 重置Rewriter，恢复原始文本
@@ -1511,6 +1586,14 @@ public:
             sprintf(buffer, kappaMatchFmt, assertFuncName, decisionCount, decisionCount, i, expect2SeqNum[expect.at(i)]);
             kappaMatchStmt += buffer;
         }
+
+        if (EnableSpecPath) {
+            kappaMatchStmt = "";
+            sprintf(buffer, pathRecordStmt, specifiedPathCount);
+            kappaMatchStmt += buffer;
+            specifiedPathCount++;
+        }
+
         // 替换整个decision
         char kappaRstStmt[MAX_BUFFER_SIZE];
         sprintf(kappaRstStmt, kappaRstFmt, decisionCount);
@@ -1857,6 +1940,12 @@ private:
 
     // 为switch生成kappa stmt
     void insertAssertForSwitchStmt(SwitchStmt *switchStmt, int &switchCount) {
+        int caseNum = 0;
+        SwitchCase *switchCaseNum = switchStmt->getSwitchCaseList();
+        while (NULL != switchCaseNum) {
+            switchCaseNum = switchCaseNum->getNextSwitchCase();
+            caseNum++;
+        }
 #ifndef TRIGGER
         char assertFuncName[64] = "klee_assert";
 #else
@@ -1871,13 +1960,21 @@ private:
         while (NULL != switchCase) {
             SwitchAll++;
             triggerNum++;
-            sprintf(buffer, switchMatchFmt, assertFuncName, switchCount++);
+            if (EnableSpecPath) {
+                sprintf(buffer, switchPathRecordStmt, switchPathCount, caseNum--);
+            }
+            else {
+                sprintf(buffer, switchMatchFmt, assertFuncName, switchCount++);
+            }
             rewriterController->InsertTextAfter(switchCase->getSubStmt()->getSourceRange().getBegin(), buffer, INDENTATION_NUM);
 
             switchCase = switchCase->getNextSwitchCase();
         }
         if (KappaMode == KappaGeneratePolicy::Decision || KappaMode == KappaGeneratePolicy::Sequence) {
             rewriterController->writeResult();
+        }
+        if (EnableSpecPath) {
+            switchPathCount++;
         }
     }
 
@@ -2270,6 +2367,52 @@ vector<fs::path> selectCoverageTestCase(vector<TestCaseSelector> &testCaseSelect
     return testCaseFiles;
 }
 
+// 解析Path字符串，“-”表示一个decision(条件)结束，“^”表示一个switch结束 分隔符都放置在路径值后面
+// "|"表示一组path的结束
+// 例 T-T-F-X-3^|T-X-T-X-2^|
+void parseSpecifiedPath(string SpecPath) {
+    specifiedPath.clear();
+    switchPath.clear();
+    specifiedPathCount = 0;
+    switchPathCount = 0;
+    pathCount = 0;
+
+    vector<int> oneSpecifiedPath;
+    vector<int> oneSwitchPath;
+
+    int path = 0;
+
+    for (int i=0; i<SpecPath.size(); i++) {
+        switch (SpecPath[i]) {
+            case '|':
+                specifiedPath.push_back(oneSpecifiedPath);
+                switchPath.push_back(oneSwitchPath);
+                oneSpecifiedPath.clear();
+                oneSwitchPath.clear();
+                pathCount++;
+                break;
+            case '-': oneSpecifiedPath.push_back(path); path = 0; break;
+            case 'T': path = 1; break;
+            case 'F': path = 0; break;
+            case 'X': path = -1; break;
+            case 'P': path = -2; break;
+            case '^': oneSwitchPath.push_back(path); path = 0; break;
+            case '0':
+            case '1':
+            case '2':
+            case '3':
+            case '4':
+            case '5':
+            case '6':
+            case '7':
+            case '8':
+            case '9': path = path*10+SpecPath[i]-'0'; break;
+
+            default: llvm::errs() << "[ERROR] Invalid Specified Path!";
+        }
+    }
+}
+
 
 int main(int argc, const char **argv) {
     struct timeval timeStart;
@@ -2281,6 +2424,16 @@ int main(int argc, const char **argv) {
     CommonOptionsParser op(argc, argv, TCGCategory);
 #endif
     ClangTool Tool(op.getCompilations(), op.getSourcePathList());
+
+    if ("" != SpecPath) {
+        KappaMode = KappaGeneratePolicy::All;
+        // 指定路径情况下，其他覆盖率输出flag都无效，但是仍然要至少有一个为true，否则不能正常产生插桩代码
+        statementCoverageOutput = false;
+        pathCoverageOutput = false;
+        MCCOutput = true;
+        EnableSpecPath = 1;
+        parseSpecifiedPath(SpecPath);
+    }
 
     vector<string> sourcePathList;
 #if CLANG_VERSION == 3
@@ -2328,7 +2481,7 @@ int main(int argc, const char **argv) {
 
     // 编译生成的代码
     if (runKlee && (conditionCoverageOutput || decisionCoverageOutput || CDCOutput || MCCOutput || MCDCOutput)) {
-        string noneOptStr = NoneOpt?"-Xclang -disable-O0-optnone ":"";
+        string optStr = NoneOpt?"-O0 -Xclang -disable-O0-optnone ":"-O2 ";
         string shellScriptStr =
                 "cd "+rawPath.string()+"\n"
                 "for mode in `ls -1 | grep "+KappaSubDirNameStr+"`; \n"
@@ -2337,11 +2490,11 @@ int main(int argc, const char **argv) {
                 "        cd $mode\n"
                 "        for sourceFile in `ls -v kappa-*.c`;\n"
                 "        do\n"
-#if CLANG_VERSION == 3
-                "            "+ClangPath+" "+kleeIncludeDir+"-c -Wno-implicit-function-declaration -O0 -emit-llvm -g $sourceFile\n"
-#else
-                "            "+ClangPath+" "+kleeIncludeDir+"-c -Wno-implicit-function-declaration -O0 "+noneOptStr+"-emit-llvm -gline-tables-only $sourceFile\n"
-#endif
+                #if CLANG_VERSION == 3
+                "            "+ClangPath+" "+kleeIncludeDir+"-c -Wno-implicit-function-declaration -O2 -emit-llvm -g $sourceFile\n"
+                #else
+                "            "+ClangPath+" "+kleeIncludeDir+"-c -Wno-implicit-function-declaration "+optStr+"-emit-llvm -gline-tables-only $sourceFile\n"
+                #endif
                 "        done\n"
                 "        cd ../\n"
                 "    fi\n"
@@ -2395,14 +2548,14 @@ int main(int argc, const char **argv) {
                 "            triggerNum=$(grep 'klee_trigger' $sourceFile | wc -l)\n"
                 "            "+KleePath+" -max-memory=64000 -solver-backend=z3 "
                 "-dump-states-on-halt=false "
-#if CLANG_VERSION == 3
+                #if CLANG_VERSION == 3
                 "-allow-external-sym-calls "
-#endif
-#ifndef TRIGGER
+                #endif
+                #ifndef TRIGGER
                 +emitAllErrorsInSamePathStr
-#else
+                #else
                 "-trigger-times=$triggerNum -only-output-trigger "
-#endif
+                #endif
                 +searcherStr+useMergeStr+emitAllErrorsStr+IgnorePrintfStr+tracerXStr+optStr+"${sourceFile%.c}.bc\n"
                 "        done\n"
                 "        cd ../\n"
@@ -2420,11 +2573,11 @@ int main(int argc, const char **argv) {
                 "for sourceFile in `ls -v *.c`;\n"
                 "do\n"
                 "            "+KleePath+" --max-memory=64000 -solver-backend=z3 --search=dfs "
-#if CLANG_VERSION == 3
+                #if CLANG_VERSION == 3
                 "-allow-external-sym-calls -no-interpolation"
-#endif
+                #endif
                 "-dump-states-on-halt=0 --only-output-states-covering-new "+IgnorePrintfStr+"${sourceFile%.c}.bc\n"
-                                                                                                                                                                                                   "done\n";
+                "done\n";
         int returnCode = system(shellScriptStr.c_str());
         if (returnCode==-1) llvm::errs() << "Run Klee ERROR!\n";
     }
@@ -2436,17 +2589,19 @@ int main(int argc, const char **argv) {
                 "for sourceFile in `ls -v *.c`;\n"
                 "do\n"
                 "            "+KleePath+" --max-memory=64000 -solver-backend=z3 --search=dfs "
-#if CLANG_VERSION == 3
+                #if CLANG_VERSION == 3
                 "-allow-external-sym-calls -no-interpolation"
-#endif
+                #endif
                 "-dump-states-on-halt=0 "+IgnorePrintfStr+"${sourceFile%.c}.bc\n"
-                                                                                                                                                                 "done\n";
+                "done\n";
         int returnCode = system(shellScriptStr.c_str());
         if (returnCode==-1) llvm::errs() << "Run Klee ERROR!\n";
     }
 
     struct timeval timeKleeEnd;
     gettimeofday(&timeKleeEnd,NULL);
+
+    if (EnableSpecPath) return 0;
 
     string coverageMessage;
     if (conditionCoverageOutput || decisionCoverageOutput || CDCOutput || MCCOutput || MCDCOutput) {
