@@ -25,7 +25,7 @@
 #include <boost/regex.hpp>
 #include <sys/time.h>
 
-#define CLANG_VERSION 9
+#define CLANG_VERSION 3
 
 #define TRIGGER
 
@@ -42,7 +42,6 @@ FunctionDecl *targetFuncDecl;
 FunctionDecl *mainFuncDecl;
 bool hasMain;
 SourceLocation targetFuncStartLoc;
-SourceLocation targetFuncEndLoc;
 
 // message.txt内容
 string messageStr = "";
@@ -72,8 +71,6 @@ vector<string> decisionTextList;
 
 // 记录所有真值表的数量
 int MCDCGen, MCDCAll, CDCGen, CDCAll, conditionGen, conditionAll, decisionGen, decisionAll, MCCGen, MCCAll, SwitchGen, SwitchAll;
-int caseNumMCDC, caseNumMCC, caseNumCondition, caseNumDecision, caseNumCDC;
-int KMCDCGen, KMCDCAll, KCDCGen, KCDCAll, KconditionGen, KconditionAll, KdecisionGen, KdecisionAll, KMCCGen, KMCCAll, KSwitchGen, KSwitchAll;
 
 // 当前TriggerNum
 int triggerNum;
@@ -109,13 +106,6 @@ string KappaSubDirNameStr = "kappa";
 
 static cl::OptionCategory TCGCategory("TCG options");
 
-cl::opt<bool> KleePrintMode("klee-print", cl::desc("Klee Print Mode (default=false)."), cl::init(false));
-cl::opt<bool> OrigKleeMode("orig-klee", cl::desc("Orig Klee Mode (default=false)."), cl::init(false));
-cl::opt<bool> OrigKleeCov("orig-cov", cl::desc("Output Orig Klee Coverage (default=false)."), cl::init(false));
-
-cl::opt<string> MaxTime("max-time", cl::desc("Max KLEE run time."), cl::init(""));
-cl::opt<string> MaxMemory("max-memory", cl::desc("Max KLEE run memory."), cl::init(""));
-
 cl::opt<bool> conditionCoverageOutput("condition", cl::desc("create condition coverage output file (default=false)."), cl::init(false));
 cl::opt<bool> decisionCoverageOutput("decision", cl::desc("create decision coverage output file (default=false)."), cl::init(false));
 cl::opt<bool> CDCOutput("CDC", cl::desc("create CDC output file (default=false)."), cl::init(false));
@@ -134,13 +124,14 @@ cl::opt<int> boundary("boundary", cl::desc("Upper Bound and Lower Bound of INT v
 cl::opt<string> KleePath("klee-path", cl::desc("Path of klee"), cl::init("klee"));
 cl::opt<string> KleeIncludePath("klee-include-path", cl::desc("Path of klee include dir"), cl::init(""));
 cl::opt<string> ClangPath("clang-path", cl::desc("Path of clang"), cl::init("clang"));
-cl::opt<string> Searcher("searcher", cl::desc("Searcher (default=dfs)."), cl::init(""));
+cl::opt<string> Searcher("searcher", cl::desc("Searcher (default=dfs)."), cl::init("dfs"));
 cl::opt<bool> EnableMerge("use-merge", cl::desc("Use KLEE merge (default=false)."), cl::init(false));
 cl::opt<bool> AddIndentation("indentation", cl::desc("Add Indentation (default=true)."), cl::init(true));
 cl::opt<bool> GlobalVarSym("global-var-sym", cl::desc("Make global variable symbolic (default=true)."), cl::init(true));
 cl::opt<bool> GenForAllFunc("all-func", cl::desc("Generate kappa stmt for all function (default=false)."), cl::init(false));
 cl::opt<bool> GenForAllFuncExpectMain("all-func-expect-main", cl::desc("Generate kappa stmt for all function expect main (default=false)."), cl::init(false));
 cl::opt<bool> EarlyStop("early-stop", cl::desc("In decision Mode, Terminate state when reach assert stmt (default=false)."), cl::init(false));
+cl::opt<bool> NoneOpt("none-opt", cl::desc("Disable clang opt (default=true)."), cl::init(false));
 cl::opt<bool> Optimize("optimize", cl::desc("Enable klee optimize (default=true)."), cl::init(true));
 
 cl::opt<string> SpecPath("specPath", cl::desc("Specify path."), cl::init(""));
@@ -153,8 +144,6 @@ enum class ClangOptimizationOption {
     O0,
     O1,
     O2,
-    O3,
-    Ofast
 };
 cl::opt<ClangOptimizationOption> ClangOpt(
         "opt", cl::desc("Clang optimization option (default=true)."),
@@ -162,9 +151,7 @@ cl::opt<ClangOptimizationOption> ClangOpt(
                 clEnumValN(ClangOptimizationOption::O_, "O-", "without any optimization"),
                 clEnumValN(ClangOptimizationOption::O0, "O0", "O0"),
                 clEnumValN(ClangOptimizationOption::O1, "O1", "O1"),
-                clEnumValN(ClangOptimizationOption::O2, "O2", "O2"),
-                clEnumValN(ClangOptimizationOption::O3, "O3", "O3"),
-                clEnumValN(ClangOptimizationOption::Ofast, "Ofast", "Ofast")
+                clEnumValN(ClangOptimizationOption::O2, "O2", "O2")
 #if CLANG_VERSION == 3
                 ,clEnumValEnd),
 #else
@@ -331,7 +318,6 @@ private:
     string decision;
     vector<string> testCaseFileNameList;
     bool afterKlee;
-    bool origKlee;
     unsigned int conditionNum;
     int truthTableSeqCnt;
 
@@ -372,7 +358,7 @@ private:
             if (testCaseFileNameList.empty())
                 truthTable += "\n| ";
             else
-                truthTable += "   "+testCaseFileNameList.at(i)+"    "+ to_string(allCases.at(i).first)+"\n| ";
+                truthTable += "   "+testCaseFileNameList.at(i)+"\n| ";
         }
         truthTable = truthTable.substr(0, truthTable.size()-3);
         llvm::errs() << truthTable << "\n";
@@ -491,40 +477,98 @@ private:
         return result;
     }
 
+    // 贪心求MCDC 选择下一个最优seq
+    int getNextSeq(map<unsigned int, set<unsigned int> > &seqMatch) {
+        int result=-1;
+        int maxValue=0;
+        for (pair<unsigned int, set<unsigned int> > item : seqMatch) {
+            int seqValue = item.second.size();
+            if (seqValue > maxValue) {
+                maxValue = seqValue;
+                result = item.first;
+            }
+        }
+
+        return result;
+    }
+
+    // 贪心求MCDC 添加当前seq可达的其他seq与condition
+    long long matchLinkedSeq(vector<vector<pair<unsigned int, unsigned int> > > &MCDCPairs,
+    map<unsigned int, set<unsigned int> > &seqMatch,
+            map<pair<unsigned int, unsigned int>, unsigned int> &pairToCondition,
+    set<unsigned int> &selectedSeq, unsigned int nextSeq) {
+        map<unsigned int, unsigned int> storedSeq;
+        long long selected=0;
+        do {
+            for (unsigned int seq : seqMatch[nextSeq]) {
+                storedSeq.insert(make_pair(seq, pairToCondition[make_pair(nextSeq, seq)]));
+            }
+            unsigned int maxValue=0;
+            unsigned int nextCondition;
+            for (pair<unsigned int, unsigned int> seq: storedSeq) {
+                if (seqMatch[seq.first].size() > maxValue) {
+                    maxValue = seqMatch[seq.first].size();
+                    nextSeq = seq.first;
+                    nextCondition = seq.second;
+                }
+            }
+            selectedSeq.insert(nextSeq);
+            selected |= 1LL<<nextCondition;
+            storedSeq.erase(nextSeq);
+            for (pair<unsigned int, unsigned int> item : MCDCPairs.at(nextCondition)) {
+                seqMatch[item.first].erase(item.second);
+                seqMatch[item.second].erase(item.first);
+            }
+            for (auto it = storedSeq.begin(); it != storedSeq.end(); ) {
+                if (selected & 1LL<<(it->second)) {
+                    it = storedSeq.erase(it);
+                }
+                else {
+                    it++;
+                }
+            }
+        } while (!storedSeq.empty());
+
+        return selected;
+    }
+
     // 贪心求MCDC
     set<unsigned int> greedyMCDC(vector<vector<pair<unsigned int, unsigned int> > > &MCDCPairs) {
+        map<unsigned int, set<unsigned int> > seqMatch;
+        map<pair<unsigned int, unsigned int>, unsigned int> pairToCondition;
         set<unsigned int> selectedSeq;
+        long long selected=0;
 
-        for (int i=0; i<MCDCPairs.size(); i++) {
-            bool continueFlag = true;
-            for (pair<unsigned int, unsigned int> item : MCDCPairs.at(i)) {
-                if (selectedSeq.count(item.first) && selectedSeq.count(item.second)) {
-                    continueFlag = false;
-                    break;
-                }
-            }
-            if (!continueFlag) continue;
-
-            for (pair<unsigned int, unsigned int> item : MCDCPairs.at(i)) {
-                if (selectedSeq.count(item.first)) {
-                    selectedSeq.insert(item.second);
-                    continueFlag = false;
-                    break;
+        for (unsigned int i=0; i<conditions.size(); i++) {
+            for (pair<unsigned int, unsigned int> MCDCPair : MCDCPairs.at(i)) {
+                pairToCondition.insert(make_pair(MCDCPair, i));
+                pairToCondition.insert(make_pair(make_pair(MCDCPair.second, MCDCPair.first), i));
+                if (seqMatch.count(MCDCPair.first)==0) {
+                    seqMatch.insert(make_pair(MCDCPair.first, set<unsigned int>()));
+                    seqMatch[MCDCPair.first].insert(MCDCPair.second);
                 }
                 else
-                if (selectedSeq.count(item.second)) {
-                    selectedSeq.insert(item.first);
-                    continueFlag = false;
-                    break;
+                    seqMatch[MCDCPair.first].insert(MCDCPair.second);
+                if (seqMatch.count(MCDCPair.second)==0) {
+                    seqMatch.insert(make_pair(MCDCPair.second, set<unsigned int>()));
+                    seqMatch[MCDCPair.second].insert(MCDCPair.first);
                 }
+                else
+                    seqMatch[MCDCPair.second].insert(MCDCPair.first);
             }
-            if (!continueFlag) continue;
-            for (pair<unsigned int, unsigned int> item : MCDCPairs.at(i)) {
-                selectedSeq.insert(item.first);
-                selectedSeq.insert(item.second);
-                continueFlag = false;
-                break;
-            }
+        }
+
+        long long target=0;
+        for (unsigned int i=0; i<conditions.size(); i++)
+            target |= 1LL<<i;
+
+        while (selected != target) {
+            int nextSeq = getNextSeq(seqMatch);
+            // 无法到达100%覆盖率，退出
+            if (nextSeq == -1) break;
+            selectedSeq.insert(nextSeq);
+            long long nextSelected = matchLinkedSeq(MCDCPairs, seqMatch, pairToCondition, selectedSeq, nextSeq);
+            selected |= nextSelected;
         }
 
         return selectedSeq;
@@ -532,69 +576,50 @@ private:
 
     set<unsigned int> bestMCDCResult;
     unsigned int best;
-    int mcdcTryTimes;
 
     // dfs求MCDC 递归过程
     void rdfsMCDC(vector<vector<pair<unsigned int, unsigned int> > > &MCDCPairs,
-    unsigned int conditionIdx, map<unsigned int, bool> &selectedSeq, int selectedNum) {
-        if (mcdcTryTimes > 1000000) {
-            return;
-        }
-        mcdcTryTimes++;
+    unsigned int conditionIdx, set<unsigned int> &selectedSeq) {
+        if (selectedSeq.size() > best) return;
 
-        if (selectedNum >= best) return;
-
-        if (conditionIdx >= MCDCPairs.size()) {
+        if (conditionIdx == MCDCPairs.size()) {
             bestMCDCResult.clear();
-            best = selectedNum;
-            for (auto i : selectedSeq) {
-                if (i.second)
-                    bestMCDCResult.insert(i.first);
+            best = selectedSeq.size();
+            for (unsigned int i : selectedSeq) {
+                bestMCDCResult.insert(i);
             }
             return;
         }
 
         if (MCDCPairs.at(conditionIdx).empty()) {
-            rdfsMCDC(MCDCPairs, conditionIdx+1, selectedSeq, selectedNum);
+            rdfsMCDC(MCDCPairs, conditionIdx+1, selectedSeq);
             return;
         }
 
         for (pair<unsigned int, unsigned int> item : MCDCPairs.at(conditionIdx)) {
-            if (selectedSeq.count(item.first) && selectedSeq.at(item.first) && selectedSeq.count(item.second) && selectedSeq.at(item.second)) {
-                rdfsMCDC(MCDCPairs, conditionIdx+1, selectedSeq, selectedNum);
+            if ((selectedSeq.count(item.first)==1) && (selectedSeq.count(item.second)==1)) {
+                rdfsMCDC(MCDCPairs, conditionIdx+1, selectedSeq);
                 return;
             }
         }
 
         for (pair<unsigned int, unsigned int> item : MCDCPairs.at(conditionIdx)) {
-            if (selectedSeq.count(item.first) && selectedSeq.at(item.first)) {
-                if (selectedSeq.count(item.second))
-                    selectedSeq.at(item.second) = true;
-                else
-                    selectedSeq.insert(make_pair(item.second, true));
-                rdfsMCDC(MCDCPairs, conditionIdx+1, selectedSeq, selectedNum+1);
-                selectedSeq.at(item.second) = false;
+            if (selectedSeq.count(item.first)) {
+                selectedSeq.insert(item.second);
+                rdfsMCDC(MCDCPairs, conditionIdx+1, selectedSeq);
+                selectedSeq.erase(item.second);
             }
-            else if (selectedSeq.count(item.second) && selectedSeq.at(item.second)) {
-                if (selectedSeq.count(item.first))
-                    selectedSeq.at(item.first) = true;
-                else
-                    selectedSeq.insert(make_pair(item.first, true));
-                rdfsMCDC(MCDCPairs, conditionIdx+1, selectedSeq, selectedNum+1);
-                selectedSeq.at(item.first) = false;
+            else if (selectedSeq.count(item.second)) {
+                selectedSeq.insert(item.first);
+                rdfsMCDC(MCDCPairs, conditionIdx+1, selectedSeq);
+                selectedSeq.erase(item.first);
             }
             else {
-                if (selectedSeq.count(item.second))
-                    selectedSeq.at(item.second) = true;
-                else
-                    selectedSeq.insert(make_pair(item.second, true));
-                if (selectedSeq.count(item.first))
-                    selectedSeq.at(item.first) = true;
-                else
-                    selectedSeq.insert(make_pair(item.first, true));
-                rdfsMCDC(MCDCPairs, conditionIdx+1, selectedSeq, selectedNum+2);
-                selectedSeq.at(item.first) = false;
-                selectedSeq.at(item.second) = false;
+                selectedSeq.insert(item.first);
+                selectedSeq.insert(item.second);
+                rdfsMCDC(MCDCPairs, conditionIdx+1, selectedSeq);
+                selectedSeq.erase(item.first);
+                selectedSeq.erase(item.second);
             }
         }
     }
@@ -605,16 +630,12 @@ private:
         set<unsigned int> result;
         result = greedyMCDC(MCDCPairs);
         best = result.size();
-        int tmp = best;
-        map<unsigned int, bool> selectedSeq;
-        mcdcTryTimes = 0;
-        rdfsMCDC(MCDCPairs, 0, selectedSeq, 0);
+        set<unsigned int> selectedSeq;
+        rdfsMCDC(MCDCPairs, 0, selectedSeq);
 
-        if (best < tmp) {
-            result.clear();
-            for (unsigned int i : bestMCDCResult) {
-                result.insert(i);
-            }
+        result.clear();
+        for (unsigned int i : bestMCDCResult) {
+            result.insert(i);
         }
 
         return result;
@@ -649,10 +670,6 @@ private:
             messageStr += "Decision coverage : "+formatDoubleValue((double)result.size()*100/2, 2)+"%\n\n";
             decisionGen += result.size();
             decisionAll += 2;
-        }
-        if (origKlee) {
-            KdecisionGen += result.size();
-            KdecisionAll += 2;
         }
         return decisionResult;
     }
@@ -712,10 +729,6 @@ private:
             messageStr += "Condition coverage : "+formatDoubleValue((double)completeConditionNum*100/(conditionNum*2), 2)+"%\n\n";
             conditionGen += completeConditionNum;
             conditionAll += conditionNum*2;
-        }
-        if (origKlee) {
-            KconditionGen += completeConditionNum;
-            KconditionAll += conditionNum*2;
         }
 
         return conditionResult;
@@ -782,10 +795,6 @@ private:
             CDCGen += completeConditionNum;
             CDCAll += conditionNum*2+2;
         }
-        if (origKlee) {
-            KCDCGen += completeConditionNum;
-            KCDCAll += conditionNum*2+2;
-        }
 
         return CDCResult;
     }
@@ -817,7 +826,7 @@ private:
             }
         }
         for (unsigned int i=0; i<conditionNum; i++) {
-            if (MCDCPairs.at(i).empty() && !origKlee)
+            if (MCDCPairs.at(i).empty())
                 MCDCPairs.at(i).insert(MCDCPairs.at(i).end(), MaskingPairs.at(i).begin(), MaskingPairs.at(i).end());
             // 检查给定的测试用例集能否得到100%的MCDC
             if (!MCDCPairs.at(i).empty())
@@ -859,10 +868,6 @@ private:
             MCDCGen += completePairNum;
             MCDCAll += conditionNum;
         }
-        if (origKlee) {
-            KMCDCGen += completePairNum;
-            KMCDCAll += conditionNum;
-        }
 
         return MCDCResult;
     }
@@ -882,10 +887,9 @@ public:
                      string decision,
                      vector<string> testCaseFileNameList = vector<string>(),
                      bool afterKlee=false,
-                     int truthTableSeqCnt=-1,
-                     bool origKlee=false) :
+                     int truthTableSeqCnt=-1) :
             trueCases(trueCases), falseCases(falseCases), conditions(conditions), decision(decision),
-            testCaseFileNameList(testCaseFileNameList), afterKlee(afterKlee), truthTableSeqCnt(truthTableSeqCnt), origKlee(origKlee) {
+            testCaseFileNameList(testCaseFileNameList), afterKlee(afterKlee), truthTableSeqCnt(truthTableSeqCnt) {
 
         addAll(allCases, trueCases);
         addAll(allCases, falseCases);
@@ -912,29 +916,17 @@ public:
                 MCCGen += allCases.size();
                 MCCAll += truthTableSeqCnt;
             }
-            if (origKlee) {
-                KMCCGen += allCases.size();
-                KMCCAll += truthTableSeqCnt;
-            }
         }
 
         if (MCCOutput) MCCTestCases = allCases;
-        if (decisionCoverageOutput && (afterKlee || OrigKleeCov)) decisionTestCases = calculateDecision();
-        if (conditionCoverageOutput && (afterKlee || OrigKleeCov)) conditionTestCases = calculateCondition();
-        if (CDCOutput && (afterKlee || OrigKleeCov)) CDCTestCases = calculateCDC();
-        if (MCDCOutput && (afterKlee || OrigKleeCov)) MCDCTestCases = calculateMCDC();
+        if (decisionCoverageOutput && afterKlee) decisionTestCases = calculateDecision();
+        if (conditionCoverageOutput && afterKlee) conditionTestCases = calculateCondition();
+        if (CDCOutput && afterKlee) CDCTestCases = calculateCDC();
+        if (MCDCOutput && afterKlee) MCDCTestCases = calculateMCDC();
 
         llvm::errs() << "\n";
         if (afterKlee)
             messageStr += "\n";
-        if (afterKlee && OrigKleeCov) {
-            vector<pair<long long, long long> > t2;
-            if (!trueCases.empty()) t2.push_back(trueCases.at(0));
-            vector<pair<long long, long long> > f2;
-            if (!falseCases.empty()) f2.push_back(falseCases.at(0));
-            TestCaseSelector orig(t2, f2, conditions, decision, testCaseFileNameList,
-                                              false, truthTableSeqCnt, true);
-        }
     }
 };
 
@@ -1571,7 +1563,7 @@ public:
     // 添加kappa stmt
     void editRewriter(Expr *decision, vector<Expr*> &conditions, vector<pair<long long, long long> > &expect,
                       map<pair<long long, long long>, unsigned int> &expect2SeqNum,
-                      SourceLocation declLoc, SourceLocation decisionStartLoc, SourceLocation stmtEndLoc, SourceRange decisionSourceRange,
+                      SourceLocation declLoc, SourceLocation decisionStartLoc, SourceRange decisionSourceRange,
                       int decisionCount, unsigned int trueCaseNum, bool isLoop=false) {
         char buffer[MAX_BUFFER_SIZE];
 
@@ -1592,27 +1584,21 @@ public:
 
         // 生成断言语句
         string kappaMatchStmt = "";
-        if (KleePrintMode) {
-            string matchStmt = "printf(\"{\\\"Kappa"+to_string(decisionCount)+"\\\":%lld, \\\"size\\\":"
-                    + to_string(expect.size()) +", \\\"result\\\":%d}\\n\", klee_get_valuell(__kappa__"+to_string(decisionCount)+"__), klee_get_value_i32(__Cond_Value__));";
-            InsertTextAfter(stmtEndLoc, matchStmt);
-        } else{
-            for (unsigned int i=0; i<expect.size(); i++) {
+        for (unsigned int i=0; i<expect.size(); i++) {
 #ifdef TRIGGER
-                // 是循环且为Decision模式，需要特殊判断
-                if (isLoop && KappaMode==KappaGeneratePolicy::Decision){
-                    // 逻辑表达式值为真，循环没有结束，需要继续运行
-                    if (i < trueCaseNum)
-                        assertFuncName = triggerFuncName;
-                        // 逻辑表达式值为假，循环结束，提前结束运行
-                    else
-                        assertFuncName = triggerAndTerminateFuncName;
-                }
+            // 是循环且为Decision模式，需要特殊判断
+            if (isLoop && KappaMode==KappaGeneratePolicy::Decision){
+                // 逻辑表达式值为真，循环没有结束，需要继续运行
+                if (i < trueCaseNum)
+                    assertFuncName = triggerFuncName;
+                    // 逻辑表达式值为假，循环结束，提前结束运行
+                else
+                    assertFuncName = triggerAndTerminateFuncName;
+            }
 #endif
 
-                sprintf(buffer, kappaMatchFmt, assertFuncName, decisionCount, decisionCount, i, expect2SeqNum[expect.at(i)]);
-                kappaMatchStmt += buffer;
-            }
+            sprintf(buffer, kappaMatchFmt, assertFuncName, decisionCount, decisionCount, i, expect2SeqNum[expect.at(i)]);
+            kappaMatchStmt += buffer;
         }
 
         if (EnableSpecPath) {
@@ -1678,10 +1664,10 @@ public:
     // 添加kappa stmt 单个expect
     void editRewriter(Expr *decision, vector<Expr*> &conditions, pair<long long, long long> &expect,
                       map<pair<long long, long long>, unsigned int> &expect2SeqNum,
-                      SourceLocation declLoc, SourceLocation decisionStartLoc, SourceLocation stmtEndLoc, SourceRange decisionSourceRange, int decisionCount, unsigned int trueCaseNum) {
+                      SourceLocation declLoc, SourceLocation decisionStartLoc, SourceRange decisionSourceRange, int decisionCount, unsigned int trueCaseNum) {
         vector<pair<long long, long long> > expectVector;
         expectVector.push_back(expect);
-        editRewriter(decision, conditions, expectVector, expect2SeqNum, declLoc, decisionStartLoc, stmtEndLoc, decisionSourceRange, decisionCount, trueCaseNum);
+        editRewriter(decision, conditions, expectVector, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, trueCaseNum);
     }
 
     void InsertTextBefore(SourceLocation loc, string str, int offset=0) {
@@ -1885,12 +1871,6 @@ public:
         vars.clear();
         externVariables.clear();
         makeSymbolicStmt = "";
-
-        char buffer[MAX_BUFFER_SIZE];
-        makeSymbolicStmt += "    int __nondet__;\n";
-        sprintf(buffer, makeSymbolicFmt, "&__nondet__", "__nondet__", "int __nondet__");
-        makeSymbolicStmt += "    ";
-        makeSymbolicStmt += buffer;
     }
 
     virtual bool VisitFunctionDecl(FunctionDecl *func) {
@@ -1936,36 +1916,36 @@ private:
     bool isTargetFunction;
 
     // 为一个decision生成kappa stmt
-    void insertKappaStmt(Expr *decision, SourceLocation declLoc, SourceLocation decisionStartLoc, SourceLocation stmtEndLoc, SourceRange decisionSourceRange, int decisionCount, bool isLoop=false) {
+    void insertKappaStmt(Expr *decision, SourceLocation declLoc, SourceLocation decisionStartLoc, SourceRange decisionSourceRange, int decisionCount, bool isLoop=false) {
         shared_ptr<LogicExpressionTree> leTree = make_shared<LogicExpressionTree>(decision);
         map<pair<long long, long long>, unsigned int> expect2SeqNum = leTree->getSeqNumMap();
 
         if (KappaMode == KappaGeneratePolicy::All) {
             triggerNum += expect2SeqNum.size();
-            rewriterController->editRewriter(decision, leTree->conditions, leTree->MCCExpect, expect2SeqNum, declLoc, decisionStartLoc, stmtEndLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
+            rewriterController->editRewriter(decision, leTree->conditions, leTree->MCCExpect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
         }
         else
 #ifndef TRIGGER
             if (KappaMode == KappaGeneratePolicy::Decision && !isLoop) {
             triggerNum += expect2SeqNum.size();
-            rewriterController->editRewriter(decision, leTree->conditions, leTree->MCCExpect, expect2SeqNum, declLoc, decisionStartLoc, stmtEndLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
+            rewriterController->editRewriter(decision, leTree->conditions, leTree->MCCExpect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
             rewriterController->writeResult();
         } else if (KappaMode == KappaGeneratePolicy::Sequence || isLoop) {
             for (pair<long long, long long> expect : leTree->MCCExpect) {
                 triggerNum++;
-                rewriterController->editRewriter(decision, leTree->conditions, expect, expect2SeqNum, declLoc, decisionStartLoc, stmtEndLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
+                rewriterController->editRewriter(decision, leTree->conditions, expect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
                 rewriterController->writeResult();
             }
         }
 #else
         if (KappaMode == KappaGeneratePolicy::Decision) {
             triggerNum += expect2SeqNum.size();
-            rewriterController->editRewriter(decision, leTree->conditions, leTree->MCCExpect, expect2SeqNum, declLoc, decisionStartLoc, stmtEndLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size(), isLoop);
+            rewriterController->editRewriter(decision, leTree->conditions, leTree->MCCExpect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size(), isLoop);
             rewriterController->writeResult();
         } else if (KappaMode == KappaGeneratePolicy::Sequence) {
             for (pair<long long, long long> expect : leTree->MCCExpect) {
                 triggerNum++;
-                rewriterController->editRewriter(decision, leTree->conditions, expect, expect2SeqNum, declLoc, decisionStartLoc, stmtEndLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
+                rewriterController->editRewriter(decision, leTree->conditions, expect, expect2SeqNum, declLoc, decisionStartLoc, decisionSourceRange, decisionCount, leTree->MCCExpectTrue.size());
                 rewriterController->writeResult();
             }
         }
@@ -2042,7 +2022,6 @@ public:
                 isTargetFunction = true;
                 if (func->hasBody()) {
                     Stmt *targetFuncBody = func->getBody();
-                    targetFuncEndLoc = targetFuncBody->getSourceRange().getEnd();
                     if (CompoundStmt *compoundStmt = dyn_cast<CompoundStmt>(targetFuncBody)) {
                         if (!compoundStmt->body_empty()) {
                             Stmt *firstStmt = *(compoundStmt->body_begin());
@@ -2061,7 +2040,6 @@ public:
 
     virtual bool VisitStmt(Stmt *st) {
         if (!isTargetFunction) return true;
-        if (OrigKleeMode) return true;
 
         SourceRange range = st->getSourceRange();
         if (range.getBegin().isMacroID()) {
@@ -2069,23 +2047,23 @@ public:
         }
 
         if (IfStmt *ifStmt = dyn_cast<IfStmt>(st)) {
-            insertKappaStmt(ifStmt->getCond(), targetFuncStartLoc, ifStmt->getSourceRange().getBegin(), targetFuncEndLoc, ifStmt->getCond()->getSourceRange(), decisionCount);
+            insertKappaStmt(ifStmt->getCond(), targetFuncStartLoc, ifStmt->getSourceRange().getBegin(), ifStmt->getCond()->getSourceRange(), decisionCount);
             decisionCount++;
         }
         if (DoStmt *doStmt = dyn_cast<DoStmt>(st)) {
-            insertKappaStmt(doStmt->getCond(), targetFuncStartLoc, doStmt->getSourceRange().getBegin(), targetFuncEndLoc, doStmt->getCond()->getSourceRange(), decisionCount, true);
+            insertKappaStmt(doStmt->getCond(), targetFuncStartLoc, doStmt->getSourceRange().getBegin(), doStmt->getCond()->getSourceRange(), decisionCount, true);
             decisionCount++;
         }
         if (WhileStmt *whileStmt = dyn_cast<WhileStmt>(st)) {
-            insertKappaStmt(whileStmt->getCond(), targetFuncStartLoc, whileStmt->getSourceRange().getBegin(), targetFuncEndLoc, whileStmt->getCond()->getSourceRange(), decisionCount, true);
+            insertKappaStmt(whileStmt->getCond(), targetFuncStartLoc, whileStmt->getSourceRange().getBegin(), whileStmt->getCond()->getSourceRange(), decisionCount, true);
             decisionCount++;
         }
         if (ForStmt *forStmt = dyn_cast<ForStmt>(st)) {
-            insertKappaStmt(forStmt->getCond(), targetFuncStartLoc, forStmt->getSourceRange().getBegin(), targetFuncEndLoc, forStmt->getCond()->getSourceRange(), decisionCount, true);
+            insertKappaStmt(forStmt->getCond(), targetFuncStartLoc, forStmt->getSourceRange().getBegin(), forStmt->getCond()->getSourceRange(), decisionCount, true);
             decisionCount++;
         }
         if (ConditionalOperator *coStmt = dyn_cast<ConditionalOperator>(st)) {
-            insertKappaStmt(coStmt->getCond(), targetFuncStartLoc, coStmt->getSourceRange().getBegin(), targetFuncEndLoc, coStmt->getCond()->getSourceRange(), decisionCount);
+            insertKappaStmt(coStmt->getCond(), targetFuncStartLoc, coStmt->getSourceRange().getBegin(), coStmt->getCond()->getSourceRange(), decisionCount);
             decisionCount++;
         }
         if (SwitchStmt *switchStmt = dyn_cast<SwitchStmt>(st)) {
@@ -2176,53 +2154,55 @@ public:
 
     // clang相关主要函数
     virtual void HandleTranslationUnit(ASTContext &Context) {
-        // 遍历源代码寻找符合名称的函数
-        functionDeclCollectorVisitor->TraverseDecl(Context.getTranslationUnitDecl());
-        // 没有找到符合该名称的函数
-        if (funcDeclList.size() == 0) {
-            llvm::errs() << "ERROR : function named \"" << targetFuncName << "\" not found!\n";
-            exit(EXIT_FAILURE);
-        }
-        // 正好找到了一个符合该名称的函数
-        if (funcDeclList.size() == 1) {
-            targetFuncDecl = funcDeclList.at(0);
-        }
-            // 找到了不止一个符合该名称的函数
-        else {
-            llvm::errs() << "found " << funcDeclList.size() << " functions named " << targetFuncName << ":\n";
-            for (unsigned int i=0; i<funcDeclList.size(); i++) {
-                string funcSourceText = sourceCode.getRewrittenText(funcDeclList.at(i)->getSourceRange());
-                string funcSignText = funcSourceText.substr(0, funcSourceText.find_first_of('{')-1);
-                llvm::errs() << "[" << i+1 << "] : " << trim(funcSignText) << "\n";
+        if (targetFuncName.compare("*")!=0) {
+            // 遍历源代码寻找符合名称的函数
+            functionDeclCollectorVisitor->TraverseDecl(Context.getTranslationUnitDecl());
+            // 没有找到符合该名称的函数
+            if (funcDeclList.size() == 0) {
+                llvm::errs() << "ERROR : function named \"" << targetFuncName << "\" not found!\n";
+                exit(EXIT_FAILURE);
             }
-            llvm::errs() << "please choose one :\n";
-            unsigned int funcDeclIdx;
-            std::cin >> funcDeclIdx;
-            while (funcDeclIdx==0 || funcDeclIdx > funcDeclList.size()) {
-                llvm::errs() << "please enter number between 1 and " << funcDeclList.size() << " :\n";
+            // 正好找到了一个符合该名称的函数
+            if (funcDeclList.size() == 1) {
+                targetFuncDecl = funcDeclList.at(0);
+            }
+                // 找到了不止一个符合该名称的函数
+            else {
+                llvm::errs() << "found " << funcDeclList.size() << " functions named " << targetFuncName << ":\n";
+                for (unsigned int i=0; i<funcDeclList.size(); i++) {
+                    string funcSourceText = sourceCode.getRewrittenText(funcDeclList.at(i)->getSourceRange());
+                    string funcSignText = funcSourceText.substr(0, funcSourceText.find_first_of('{')-1);
+                    llvm::errs() << "[" << i+1 << "] : " << trim(funcSignText) << "\n";
+                }
+                llvm::errs() << "please choose one :\n";
+                unsigned int funcDeclIdx;
                 std::cin >> funcDeclIdx;
+                while (funcDeclIdx==0 || funcDeclIdx > funcDeclList.size()) {
+                    llvm::errs() << "please enter number between 1 and " << funcDeclList.size() << " :\n";
+                    std::cin >> funcDeclIdx;
+                }
+                string funcSourceText = sourceCode.getRewrittenText(funcDeclList.at(funcDeclIdx-1)->getSourceRange());
+                string funcSignText = funcSourceText.substr(0, funcSourceText.find_first_of('{')-1);
+                llvm::errs() << "you choose : " << trim(funcSignText) << "\n";
+                targetFuncDecl = funcDeclList.at(funcDeclIdx-1);
             }
-            string funcSourceText = sourceCode.getRewrittenText(funcDeclList.at(funcDeclIdx-1)->getSourceRange());
-            string funcSignText = funcSourceText.substr(0, funcSourceText.find_first_of('{')-1);
-            llvm::errs() << "you choose : " << trim(funcSignText) << "\n";
-            targetFuncDecl = funcDeclList.at(funcDeclIdx-1);
-        }
 
-        // 遍历源代码生成驱动函数代码
-        driverFuncGenerateVisitor->TraverseDecl(Context.getTranslationUnitDecl());
-        if (!targetFuncName.compare("main")==0) {
-            makeSymbolicStmt += "    "+targetFuncName+"(";
-            for (ParmVarDecl **i=targetFuncDecl->param_begin(); i!=targetFuncDecl->param_end(); i++) {
-                ParmVarDecl *parmVarDecl = *i;
-                makeSymbolicStmt += parmVarDecl->getNameAsString();
-                if (i != (targetFuncDecl->param_end()-1)) makeSymbolicStmt += ", ";
+            // 遍历源代码生成驱动函数代码
+            driverFuncGenerateVisitor->TraverseDecl(Context.getTranslationUnitDecl());
+            if (!targetFuncName.compare("main")==0) {
+                makeSymbolicStmt += "    "+targetFuncName+"(";
+                for (ParmVarDecl **i=targetFuncDecl->param_begin(); i!=targetFuncDecl->param_end(); i++) {
+                    ParmVarDecl *parmVarDecl = *i;
+                    makeSymbolicStmt += parmVarDecl->getNameAsString();
+                    if (i != (targetFuncDecl->param_end()-1)) makeSymbolicStmt += ", ";
+                }
+                makeSymbolicStmt += ");\n";
             }
-            makeSymbolicStmt += ");\n";
-        }
 
-        resetOutputDir();
-        if (addDriverFunc && (targetFuncName != "main") && hasMain) {
-            llvm::errs() << "WARNING :　Already have main function! Driver Function will replace old main function.\n";
+            resetOutputDir();
+            if (addDriverFunc && (targetFuncName != "main") && hasMain) {
+                llvm::errs() << "WARNING :　Already have main function! Driver Function will replace old main function.\n";
+            }
         }
 
         // 遍历源代码生成kappa相关代码
@@ -2502,15 +2482,13 @@ int main(int argc, const char **argv) {
     string searcherStr;
     switch (TracerX) {
         case TracerXPolicy::On : searcherStr = "-search=dfs "; break;
-        case TracerXPolicy::Off : searcherStr = Searcher!=""?"-search="+Searcher+" ":""; break;
-        default : searcherStr = Searcher!=""?"-search="+Searcher+" ":"";
+        case TracerXPolicy::Off : searcherStr = "-search="+Searcher+" "; break;
+        default : searcherStr = "-search=dfs ";
     }
     string IgnorePrintfStr = IgnorePrintf?"-ignore-printf ":"";
     string useMergeStr = EnableMerge?"-use-merge ":"";
     // 若启用merge，则interpolation失效
     if (EnableMerge) tracerXStr = "-no-interpolation ";
-    string maxTimeStr = MaxTime!=""?"-max-time="+MaxTime+" ":"";
-    string maxMemoryStr = MaxMemory!=""?"-max-memory="+MaxMemory+" ":"";
 
     // 编译生成的代码
     if (runKlee && (conditionCoverageOutput || decisionCoverageOutput || CDCOutput || MCCOutput || MCDCOutput)) {
@@ -2520,8 +2498,6 @@ int main(int argc, const char **argv) {
             case ClangOptimizationOption::O0 : optStr = "-O0 "; break;
             case ClangOptimizationOption::O1 : optStr = "-O1 "; break;
             case ClangOptimizationOption::O2 : optStr = "-O2 "; break;
-            case ClangOptimizationOption::O3 : optStr = "-O3 "; break;
-            case ClangOptimizationOption::Ofast : optStr = "-Ofast "; break;
             default : optStr = "-O0 ";
         }
         string shellScriptStr =
@@ -2573,8 +2549,11 @@ int main(int argc, const char **argv) {
     struct timeval timeCodeCompliedEnd;
     gettimeofday(&timeCodeCompliedEnd,NULL);
 
-    if (KleePrintMode || OrigKleeMode) {
+    // 运行klee
+    if (runKlee && (conditionCoverageOutput || decisionCoverageOutput || CDCOutput || MCCOutput || MCDCOutput)) {
         string emitAllErrorsStr = EmitAllErrors?"-emit-all-errors ":"";
+        // Kappa生成策略为在同一个文件中生成所有decision的Kappa时，需要-emit-all-errors-in-same-path参数保证路径触发断言后不会停止
+        string emitAllErrorsInSamePathStr = (KappaMode == KappaGeneratePolicy::All)?"-emit-all-errors-in-same-path ":"";
         string optStr = Optimize?"-optimize ":"";
         string shellScriptStr =
                 "cd "+rawPath.string()+"\n"
@@ -2584,54 +2563,25 @@ int main(int argc, const char **argv) {
                                                                                        "        cd $mode\n"
                                                                                        "        for sourceFile in `ls -v kappa-*.c`;\n"
                                                                                        "        do\n"
-                                                                                       "            "+KleePath+" -solver-backend=z3 "
+                                                                                       "            triggerNum=$(grep 'klee_trigger' $sourceFile | wc -l)\n"
+                                                                                       "            "+KleePath+" -max-memory=64000 -solver-backend=z3 "
                                                                                                                "-dump-states-on-halt=false "
                                                                                                                #if CLANG_VERSION == 3
-                                                                                                               "-no-interpolation -allow-external-sym-calls "
+                                                                                                               "-allow-external-sym-calls "
+                                                                                                               #endif
+                                                                                                               #ifndef TRIGGER
+                                                                                                               +emitAllErrorsInSamePathStr
+                                                                                                               #else
+                                                                                                               "-trigger-times=$triggerNum -only-output-trigger "
                 #endif
-                +searcherStr+emitAllErrorsStr+optStr+"-only-output-trigger ${sourceFile%.c}.bc >> ../klee_print.msg\n"
-                                                     "        done\n"
-                                                     "        cd ../\n"
-                                                     "    fi\n"
-                                                     "done";
+                +searcherStr+useMergeStr+emitAllErrorsStr+IgnorePrintfStr+tracerXStr+optStr+"${sourceFile%.c}.bc\n"
+                                                                                            "        done\n"
+                                                                                            "        cd ../\n"
+                                                                                            "    fi\n"
+                                                                                            "done";
 
         int returnCode = system(shellScriptStr.c_str());
         if (returnCode==-1) llvm::errs() << "Run Klee ERROR!\n";
-    } else {
-        // 运行klee
-        if (runKlee && (conditionCoverageOutput || decisionCoverageOutput || CDCOutput || MCCOutput || MCDCOutput)) {
-            string emitAllErrorsStr = EmitAllErrors?"-emit-all-errors ":"";
-            // Kappa生成策略为在同一个文件中生成所有decision的Kappa时，需要-emit-all-errors-in-same-path参数保证路径触发断言后不会停止
-            string emitAllErrorsInSamePathStr = (KappaMode == KappaGeneratePolicy::All)?"-emit-all-errors-in-same-path ":"";
-            string optStr = Optimize?"-optimize ":"";
-            string shellScriptStr =
-                    "cd "+rawPath.string()+"\n"
-                                           "for mode in `ls -1 | grep "+KappaSubDirNameStr+"`; \n"
-                                                                                           "do   \n"
-                                                                                           "    if [ -d \"$mode\" ]; then\n"
-                                                                                           "        cd $mode\n"
-                                                                                           "        for sourceFile in `ls -v kappa-*.c`;\n"
-                                                                                           "        do\n"
-                                                                                           "            triggerNum=$(grep 'klee_trigger' $sourceFile | wc -l)\n"
-                                                                                           "            "+KleePath+" -solver-backend=z3 "
-                                                                                                                   "-dump-states-on-halt=false "
-                                                                                                                   #if CLANG_VERSION == 3
-                                                                                                                   "-allow-external-sym-calls "
-                                                                                                                   #endif
-                                                                                                                   #ifndef TRIGGER
-                                                                                                                   +emitAllErrorsInSamePathStr
-                                                                                                                   #else
-                                                                                                                   "-trigger-times=$triggerNum -only-output-trigger "
-                    #endif
-                    +searcherStr+useMergeStr+emitAllErrorsStr+IgnorePrintfStr+tracerXStr+optStr+maxTimeStr+maxMemoryStr+"${sourceFile%.c}.bc\n"
-                                                                                                           "        done\n"
-                                                                                                           "        cd ../\n"
-                                                                                                           "    fi\n"
-                                                                                                           "done";
-
-            int returnCode = system(shellScriptStr.c_str());
-            if (returnCode==-1) llvm::errs() << "Run Klee ERROR!\n";
-        }
     }
 
     if (statementCoverageOutput) {
@@ -2640,12 +2590,12 @@ int main(int argc, const char **argv) {
                 "cd "+statementOutputPath.string()+"\n"
                                                    "for sourceFile in `ls -v *.c`;\n"
                                                    "do\n"
-                                                   "            "+KleePath+" -solver-backend=z3 --search=dfs "
+                                                   "            "+KleePath+" --max-memory=64000 -solver-backend=z3 --search=dfs "
                                                                            #if CLANG_VERSION == 3
                                                                            "-allow-external-sym-calls -no-interpolation"
                                                                            #endif
-                                                                           "-dump-states-on-halt=0 --only-output-states-covering-new "+IgnorePrintfStr+maxTimeStr+maxMemoryStr+"${sourceFile%.c}.bc\n"
-                                                                                                                                                                  "done\n";
+                                                                           "-dump-states-on-halt=0 --only-output-states-covering-new "+IgnorePrintfStr+"${sourceFile%.c}.bc\n"
+                                                                                                                                                       "done\n";
         int returnCode = system(shellScriptStr.c_str());
         if (returnCode==-1) llvm::errs() << "Run Klee ERROR!\n";
     }
@@ -2656,12 +2606,12 @@ int main(int argc, const char **argv) {
                 "cd "+statementOutputPath.string()+"\n"
                                                    "for sourceFile in `ls -v *.c`;\n"
                                                    "do\n"
-                                                   "            "+KleePath+" -solver-backend=z3 --search=dfs "
+                                                   "            "+KleePath+" --max-memory=64000 -solver-backend=z3 --search=dfs "
                                                                            #if CLANG_VERSION == 3
                                                                            "-allow-external-sym-calls -no-interpolation"
                                                                            #endif
-                                                                           "-dump-states-on-halt=0 "+IgnorePrintfStr+maxTimeStr+maxMemoryStr+"${sourceFile%.c}.bc\n"
-                                                                                                                                "done\n";
+                                                                           "-dump-states-on-halt=0 "+IgnorePrintfStr+"${sourceFile%.c}.bc\n"
+                                                                                                                     "done\n";
         int returnCode = system(shellScriptStr.c_str());
         if (returnCode==-1) llvm::errs() << "Run Klee ERROR!\n";
     }
@@ -2672,7 +2622,6 @@ int main(int argc, const char **argv) {
     if (EnableSpecPath) return 0;
 
     string coverageMessage;
-    double timeUsedForSelect = 0;
     if (conditionCoverageOutput || decisionCoverageOutput || CDCOutput || MCCOutput || MCDCOutput) {
         vector<map<unsigned int, fs::path> > validTestCase;
         for (unsigned int i=0; i<conditionTextList.size(); i++) {
@@ -2741,55 +2690,16 @@ int main(int argc, const char **argv) {
             }
         }
 
-        int caseNum = 0;
-        if (KleePrintMode) {
-            boost::regex seqIdxReg("\\{\"Kappa(.+)\":(.+), \"size\":(.+), \"result\":(.+)\\}");
-
-            fs::path KleePrintResultPath = rawPath;
-            KleePrintResultPath /= "klee_print.msg";
-            std::ifstream ifs(KleePrintResultPath.string());
-
-            string testCaseInfoStr;
-            while (getline(ifs, testCaseInfoStr)) {
-                caseNum++;
-                boost::sregex_token_iterator endIter;
-
-                boost::sregex_token_iterator decisionIdxIter(
-                        testCaseInfoStr.cbegin(), testCaseInfoStr.cend(), seqIdxReg, 1);
-                boost::sregex_token_iterator seqIdxIter(
-                        testCaseInfoStr.cbegin(), testCaseInfoStr.cend(), seqIdxReg, 2);
-                if (seqIdxIter != endIter) {
-                    string decisionIdxStr = *decisionIdxIter;
-                    string seqIdxStr = *seqIdxIter;
-                    int decisionIdx = atoi(decisionIdxStr.c_str());
-                    int seqIdx = atoi(seqIdxStr.c_str());
-                    validTestCase.at(decisionIdx).insert(make_pair(seqIdx, "xxx"));
-                }
-            }
-
-        }
-
         // 通过TestCaseSelector类计算符合覆盖率的测试用例集
         vector<TestCaseSelector> testCaseSelectorList;
         for (unsigned int i=0; i<validTestCase.size(); i++) {
             vector<pair<long long, long long> > trueTestCase, falseTestCase;
             vector<string> testCaseFileNameList;
             for (pair<unsigned int, fs::path> testCase : validTestCase.at(i)) {
-                if (KleePrintMode) {
-                    for (auto item : trueSeqNum2ExpectList.at(i)) {
-                        if (item.second.first == testCase.first)
-                            trueTestCase.push_back(item.second);
-                    }
-                    for (auto item : falseSeqNum2ExpectList.at(i)) {
-                        if (item.second.first == testCase.first)
-                            falseTestCase.push_back(item.second);
-                    }
-                } else {
-                    if (trueSeqNum2ExpectList.at(i).count(testCase.first))
-                        trueTestCase.push_back(trueSeqNum2ExpectList.at(i).at(testCase.first));
-                    else
-                        falseTestCase.push_back(falseSeqNum2ExpectList.at(i).at(testCase.first));
-                }
+                if (trueSeqNum2ExpectList.at(i).count(testCase.first))
+                    trueTestCase.push_back(trueSeqNum2ExpectList.at(i).at(testCase.first));
+                else
+                    falseTestCase.push_back(falseSeqNum2ExpectList.at(i).at(testCase.first));
 
                 fs::path testCaseFile = testCase.second;
                 if (fs::is_regular_file(testCaseFile)) {
@@ -2803,15 +2713,8 @@ int main(int argc, const char **argv) {
                 else testCaseFileNameList.push_back("");
             }
 
-#define getTimeUsed(timeEnd, timeStart) (timeEnd.tv_sec - timeStart.tv_sec) + (double)(timeEnd.tv_usec - timeStart.tv_usec)/1000000.0
-            struct timeval beforeSelect;
-            gettimeofday(&beforeSelect,NULL);
             TestCaseSelector testCaseSelector(trueTestCase, falseTestCase, conditionTextList.at(i), decisionTextList.at(i), testCaseFileNameList, true, expect2SeqNumList.at(i).size());
             testCaseSelectorList.push_back(testCaseSelector);
-            struct timeval afterSelect;
-            gettimeofday(&afterSelect,NULL);
-            timeUsedForSelect += getTimeUsed(afterSelect, beforeSelect);
-#undef getTimeUsed
         }
 
         llvm::errs() << "Result :\n";
@@ -2821,7 +2724,6 @@ int main(int argc, const char **argv) {
             fs::path outputPath = rawPath / "Decision";
             copyTestCaseFiles(testCaseFiles, outputPath);
             string decisionCoverageStr = formatDoubleValue((double)decisionGen*100/decisionAll, 2);
-            caseNumDecision = testCaseFiles.size();
             llvm::errs() << "Decision Coverage : " << decisionCoverageStr << "%  (" << to_string(decisionGen) << "/" << to_string(decisionAll) << ")\n";
             coverageMessage += "Decision Coverage : "+decisionCoverageStr+"%  ("+ to_string(decisionGen)+"/"+ to_string(decisionAll)+")\n";
         }
@@ -2829,7 +2731,6 @@ int main(int argc, const char **argv) {
             vector<fs::path> testCaseFiles = selectCoverageTestCase(testCaseSelectorList, switchTestCaseFile, validTestCase, "condition");
             fs::path outputPath = rawPath / "Condition";
             copyTestCaseFiles(testCaseFiles, outputPath);
-            caseNumCondition = testCaseFiles.size();
             string conditionCoverageStr = formatDoubleValue((double)conditionGen*100/conditionAll, 2);
             llvm::errs() << "Condition Coverage : " << conditionCoverageStr << "%  (" << to_string(conditionGen) << "/" << to_string(conditionAll) << ")\n";
             coverageMessage += "Condition Coverage : "+conditionCoverageStr+"%  ("+ to_string(conditionGen)+"/"+ to_string(conditionAll)+")\n";
@@ -2838,7 +2739,6 @@ int main(int argc, const char **argv) {
             vector<fs::path> testCaseFiles = selectCoverageTestCase(testCaseSelectorList, switchTestCaseFile, validTestCase, "CDC");
             fs::path outputPath = rawPath / "CDC";
             copyTestCaseFiles(testCaseFiles, outputPath);
-            caseNumCDC = testCaseFiles.size();
             string CDCStr = formatDoubleValue((double)CDCGen*100/CDCAll, 2);
             llvm::errs() << "CDC : " << CDCStr << "%  (" << to_string(CDCGen) << "/" << to_string(CDCAll) << ")\n";
             coverageMessage += "CDC : "+CDCStr+"%  ("+ to_string(CDCGen)+"/"+ to_string(CDCAll)+")\n";
@@ -2847,7 +2747,6 @@ int main(int argc, const char **argv) {
             vector<fs::path> testCaseFiles = selectCoverageTestCase(testCaseSelectorList, switchTestCaseFile, validTestCase, "MCDC");
             fs::path outputPath = rawPath / "MCDC";
             copyTestCaseFiles(testCaseFiles, outputPath);
-            caseNumMCDC = testCaseFiles.size();
             string MCDCStr = formatDoubleValue((double)MCDCGen*100/MCDCAll, 2);
             llvm::errs() << "MCDC : " << MCDCStr << "%  (" << to_string(MCDCGen) << "/" << to_string(MCDCAll) << ")\n";
             coverageMessage += "MCDC : "+MCDCStr+"%  ("+ to_string(MCDCGen)+"/"+ to_string(MCDCAll)+")\n";
@@ -2862,7 +2761,6 @@ int main(int argc, const char **argv) {
 
             fs::path outputPath = rawPath / "MCC";
             copyTestCaseFiles(testCaseFiles, outputPath);
-            caseNumMCC = testCaseFiles.size();
             string MCCStr = formatDoubleValue((double)MCCGen*100/MCCAll, 2);
             llvm::errs() << "MCC : " << MCCStr << "%  (" << to_string(MCCGen) << "/" << to_string(MCCAll) << ")\n";
             coverageMessage += "MCC : "+MCCStr+"%  ("+ to_string(MCCGen)+"/"+ to_string(MCCAll)+")\n";
@@ -2872,107 +2770,27 @@ int main(int argc, const char **argv) {
             llvm::errs() << "Switch : " << SwitchStr << "%  (" << to_string(SwitchGen) << "/" << to_string(SwitchAll) << ")\n";
             coverageMessage += "Switch : "+SwitchStr+"%  ("+ to_string(SwitchGen)+"/"+ to_string(SwitchAll)+")\n";
         }
-
-        if (KleePrintMode) {
-            caseNumCondition = caseNum;
-            caseNumDecision = caseNum;
-            caseNumCDC = caseNum;
-            caseNumMCC = caseNum;
-            caseNumMCDC = caseNum;
-        }
-
-        if (OrigKleeCov) {
-            if (decisionCoverageOutput) {
-                string decisionCoverageStr = formatDoubleValue((double)KdecisionGen*100/KdecisionAll, 2);
-                llvm::errs() << "KLEE Decision Coverage : " << decisionCoverageStr << "%  (" << to_string(KdecisionGen) << "/" << to_string(KdecisionAll) << ")\n";
-                coverageMessage += "KLEE Decision Coverage : "+decisionCoverageStr+"%  ("+ to_string(KdecisionGen)+"/"+ to_string(KdecisionAll)+")\n";
-            }
-            if (conditionCoverageOutput) {
-                string conditionCoverageStr = formatDoubleValue((double)KconditionGen*100/KconditionAll, 2);
-                llvm::errs() << "Condition Coverage : " << conditionCoverageStr << "%  (" << to_string(KconditionGen) << "/" << to_string(KconditionAll) << ")\n";
-                coverageMessage += "KLEE Condition Coverage : "+conditionCoverageStr+"%  ("+ to_string(KconditionGen)+"/"+ to_string(KconditionAll)+")\n";
-            }
-            if (CDCOutput) {
-                string CDCStr = formatDoubleValue((double)KCDCGen*100/KCDCAll, 2);
-                llvm::errs() << "KLEE CDC : " << CDCStr << "%  (" << to_string(KCDCGen) << "/" << to_string(KCDCAll) << ")\n";
-                coverageMessage += "KLEE CDC : "+CDCStr+"%  ("+ to_string(KCDCGen)+"/"+ to_string(KCDCAll)+")\n";
-            }
-            if (MCDCOutput) {
-                string MCDCStr = formatDoubleValue((double)KMCDCGen*100/KMCDCAll, 2);
-                llvm::errs() << "KLEE MCDC : " << MCDCStr << "%  (" << to_string(KMCDCGen) << "/" << to_string(KMCDCAll) << ")\n";
-                coverageMessage += "KLEE MCDC : "+MCDCStr+"%  ("+ to_string(KMCDCGen)+"/"+ to_string(KMCDCAll)+")\n";
-            }
-            if (MCCOutput) {
-                string MCCStr = formatDoubleValue((double)KMCCGen*100/KMCCAll, 2);
-                llvm::errs() << "KLEE MCC : " << MCCStr << "%  (" << to_string(KMCCGen) << "/" << to_string(KMCCAll) << ")\n";
-                coverageMessage += "KLEE MCC : "+MCCStr+"%  ("+ to_string(KMCCGen)+"/"+ to_string(KMCCAll)+")\n";
-            }
-        }
     }
 
     struct timeval timeAllEnd;
     gettimeofday(&timeAllEnd,NULL);
 
 #define getTimeUsed(timeEnd, timeStart) (timeEnd.tv_sec - timeStart.tv_sec) + (double)(timeEnd.tv_usec - timeStart.tv_usec)/1000000.0
-    string totalTimeStr = "Total time(sec)     : "+formatDoubleValue(getTimeUsed(timeAllEnd, timeStart), 6)+"\n";
-    string preProcessTimeStr = "PreProcess time(sec)  : "+formatDoubleValue(getTimeUsed(timeCodeGenerationEnd, timeStart), 6)+"\n";
-    string clangTimeStr = "Clang time(sec)  : "+formatDoubleValue(getTimeUsed(timeCodeCompliedEnd, timeCodeGenerationEnd), 6)+"\n";
-    string kleeTimeStr = "KLEE time(sec)      : "+formatDoubleValue(getTimeUsed(timeKleeEnd, timeCodeCompliedEnd), 6)+"\n";
-    string postProcessTimeStr = "PostProcess time(sec) : "+formatDoubleValue(getTimeUsed(timeAllEnd, timeKleeEnd), 6)+"\n";
-    string selectTimeStr = "Select time(sec) : "+formatDoubleValue(timeUsedForSelect, 6)+"\n";
+    string totalTimeStr = "Total time(sec)     : "+formatDoubleValue(getTimeUsed(timeAllEnd, timeStart), 4)+"\n";
+    string preProcessTimeStr = "PreProcess time(sec)  : "+formatDoubleValue(getTimeUsed(timeCodeGenerationEnd, timeStart), 4)+"\n";
+    string clangTimeStr = "Clang time(sec)  : "+formatDoubleValue(getTimeUsed(timeCodeCompliedEnd, timeCodeGenerationEnd), 4)+"\n";
+    string kleeTimeStr = "KLEE time(sec)      : "+formatDoubleValue(getTimeUsed(timeKleeEnd, timeCodeCompliedEnd), 4)+"\n";
+    string postProcessTimeStr = "PostProcess time(sec) : "+formatDoubleValue(getTimeUsed(timeAllEnd, timeKleeEnd), 4)+"\n";
+#undef getTimeUsed
 
     llvm::errs() << "\n" << totalTimeStr << preProcessTimeStr << clangTimeStr << kleeTimeStr << postProcessTimeStr << "\n";
 
-    string jsonMessage = "";
-    jsonMessage += "{\"Total time\":"+formatDoubleValue(getTimeUsed(timeAllEnd, timeStart), 6)
-            +", \"PreProcess time\":"+formatDoubleValue(getTimeUsed(timeCodeGenerationEnd, timeStart), 6)
-            +", \"Clang time\":"+formatDoubleValue(getTimeUsed(timeCodeCompliedEnd, timeCodeGenerationEnd), 6)
-            +", \"KLEE time\":"+formatDoubleValue(getTimeUsed(timeKleeEnd, timeCodeCompliedEnd), 6)
-            +", \"PostProcess time\":"+formatDoubleValue(getTimeUsed(timeAllEnd, timeKleeEnd), 6)
-            +", \"Select time\":"+formatDoubleValue(timeUsedForSelect, 6)
-            +", \"Decision\":"+formatDoubleValue((double)decisionGen*100/decisionAll, 2)
-            +", \"Condition\":"+formatDoubleValue((double)conditionGen*100/conditionAll, 2)
-            +", \"CDC\":"+formatDoubleValue((double)CDCGen*100/CDCAll, 2)
-            +", \"MCC\":"+formatDoubleValue((double)MCCGen*100/MCCAll, 2)
-            +", \"MCDC\":"+formatDoubleValue((double)MCDCGen*100/MCDCAll, 2)
-            +", \"Decision Gen\":"+to_string(decisionGen)
-            +", \"Condition Gen\":"+to_string(conditionGen)
-            +", \"CDC Gen\":"+to_string(CDCGen)
-            +", \"MCC Gen\":"+to_string(MCCGen)
-            +", \"MCDC Gen\":"+to_string(MCDCGen)
-            +", \"Decision All\":"+to_string(decisionAll)
-            +", \"Condition All\":"+to_string(conditionAll)
-            +", \"CDC All\":"+to_string(CDCAll)
-            +", \"MCC All\":"+to_string(MCCAll)
-            +", \"MCDC All\":"+to_string(MCDCAll)
-            +", \"Decision Case Num\":"+to_string(caseNumDecision)
-            +", \"Condition Case Num\":"+to_string(caseNumCondition)
-            +", \"CDC Case Num\":"+to_string(caseNumCDC)
-            +", \"MCC Case Num\":"+to_string(caseNumMCC)
-            +", \"MCDC Case Num\":"+to_string(caseNumMCDC);
-    if (OrigKleeCov) {
-        jsonMessage += ", \"KLEE Decision\":"+formatDoubleValue((double)KdecisionGen*100/KdecisionAll, 2)
-                       +", \"KLEE Condition\":"+formatDoubleValue((double)KconditionGen*100/KconditionAll, 2)
-                       +", \"KLEE CDC\":"+formatDoubleValue((double)KCDCGen*100/KCDCAll, 2)
-                       +", \"KLEE MCC\":"+formatDoubleValue((double)KMCCGen*100/KMCCAll, 2)
-                       +", \"KLEE MCDC\":"+formatDoubleValue((double)KMCDCGen*100/KMCDCAll, 2)
-                       +", \"KLEE Decision Gen\":"+to_string(KdecisionGen)
-                       +", \"KLEE Condition Gen\":"+to_string(KconditionGen)
-                       +", \"KLEE CDC Gen\":"+to_string(KCDCGen)
-                       +", \"KLEE MCC Gen\":"+to_string(KMCCGen)
-                       +", \"KLEE MCDC Gen\":"+to_string(KMCDCGen);
-    }
-    jsonMessage += "}\n";
-#undef getTimeUsed
-
     fs::path messageOutPath = rawPath / "message.txt";
     ofstream fOut(messageOutPath.string());
-    fOut << jsonMessage << "\n\n";
     fOut << coverageMessage << "\n\n";
-    fOut << totalTimeStr << preProcessTimeStr << clangTimeStr << kleeTimeStr << postProcessTimeStr << selectTimeStr << "\n\n";
+    fOut << totalTimeStr << preProcessTimeStr << clangTimeStr << kleeTimeStr << postProcessTimeStr << "\n\n";
     fOut << messageStr << "\n\n";
     fOut.close();
-    std::cout << kleeTimeStr;
 
     return 0;
 }

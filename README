@@ -14,10 +14,11 @@ export C_INCLUDE_PATH=/home/issta21-322/TracerX/tracerx/include:$C_INCLUDE_PATH
 export CPLUS_INCLUDE_PATH=/home/issta21-322/TracerX/tracerx/include:$CPLUS_INCLUDE_PATH
 
 1. source ~/.bashrc
-2. cd ~/TracerX/llvm/tools/clang/tools/TestCaseGenerate
-3. make
-4. ~/TracerX/llvm/Release/bin/TestCaseGenerate test.c -condition -decision -CDC -MCC -MCDC -func=func1 --
-或 ./run_example.sh
+2. mkdir build
+3. cd build
+4. cmake ..
+5. make
+6. TestCaseGenerate/build/TestCaseGenerate test.c -condition -decision -CDC -MCC -MCDC -func=func1 --
 
 可以在任意目录运行该工具，生成结果会放在源文件目录下新建的“./result-文件名”文件夹内
 
