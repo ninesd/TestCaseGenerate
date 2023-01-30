@@ -27,7 +27,9 @@
 
 #define CLANG_VERSION 9
 
+#if CLANG_VERSION > 3
 #define TRIGGER
+#endif
 
 using namespace std;
 using namespace clang;
@@ -146,6 +148,10 @@ cl::opt<bool> Optimize("optimize", cl::desc("Enable klee optimize (default=true)
 cl::opt<string> SpecPath("specPath", cl::desc("Specify path."), cl::init(""));
 
 cl::opt<bool> IgnorePrintf("ignore-printf", cl::desc("Ignore Printf (default=false)."), cl::init(false));
+
+cl::opt<int> MaxLoopTimes("max-loop-times", cl::desc("Only fork this many times in loop (default=disable)."), cl::init(-1));
+cl::opt<int> MaxLoopForkTimes("max-loop-fork-times", cl::desc("Only loop this many times (default=disable)."), cl::init(-1));
+cl::list<string> LinkLib("link-llvm-lib", cl::desc("Link LLVM Lib .a .bc .so.bc (default=disable)."));
 
 
 enum class ClangOptimizationOption {
@@ -1464,12 +1470,14 @@ private:
             InsertTextAfter(decisionText.first, decisionText.second);
 
         // 添加klee_merge
+#if CLANG_VERSION > 3
         if (EnableMerge) {
             for (pair<SourceLocation, string> mergeText : mergeTextList) {
 //                if ((mergeText == mergeTextList.at(mergeTextList.size()-1))) continue;
                 InsertTextAfter(mergeText.first, mergeText.second);
             }
         }
+#endif
 
         // 添加path定义
         if (EnableSpecPath) {
@@ -2512,6 +2520,13 @@ int main(int argc, const char **argv) {
     string maxTimeStr = MaxTime!=""?"-max-time="+MaxTime+" ":"";
     string maxMemoryStr = MaxMemory!=""?"-max-memory="+MaxMemory+" ":"";
 
+    string maxLoopTimesStr = MaxLoopTimes>=0?"-max-loop-times="+ to_string(MaxLoopTimes)+" ":"";
+    string maxLoopForkTimesStr = MaxLoopForkTimes>=0?"-max-loop-fork-times="+ to_string(MaxLoopForkTimes)+" ":"";
+    string linkLibStr = "";
+    for (const auto &library : LinkLib) {
+        linkLibStr += "-link-llvm-lib="+library+" ";
+    }
+
     // 编译生成的代码
     if (runKlee && (conditionCoverageOutput || decisionCoverageOutput || CDCOutput || MCCOutput || MCDCOutput)) {
         string optStr;
@@ -2589,6 +2604,7 @@ int main(int argc, const char **argv) {
                                                                                                                #if CLANG_VERSION == 3
                                                                                                                "-no-interpolation -allow-external-sym-calls "
                 #endif
+                +maxLoopTimesStr+maxLoopForkTimesStr+linkLibStr
                 +searcherStr+emitAllErrorsStr+optStr+"-only-output-trigger ${sourceFile%.c}.bc >> ../klee_print.msg\n"
                                                      "        done\n"
                                                      "        cd ../\n"
@@ -2623,6 +2639,7 @@ int main(int argc, const char **argv) {
                                                                                                                    #else
                                                                                                                    "-trigger-times=$triggerNum -only-output-trigger "
                     #endif
+                    +maxLoopTimesStr+maxLoopForkTimesStr+linkLibStr
                     +searcherStr+useMergeStr+emitAllErrorsStr+IgnorePrintfStr+tracerXStr+optStr+maxTimeStr+maxMemoryStr+"${sourceFile%.c}.bc\n"
                                                                                                            "        done\n"
                                                                                                            "        cd ../\n"
@@ -2644,7 +2661,7 @@ int main(int argc, const char **argv) {
                                                                            #if CLANG_VERSION == 3
                                                                            "-allow-external-sym-calls -no-interpolation"
                                                                            #endif
-                                                                           "-dump-states-on-halt=0 --only-output-states-covering-new "+IgnorePrintfStr+maxTimeStr+maxMemoryStr+"${sourceFile%.c}.bc\n"
+                                                                           "-dump-states-on-halt=0 --only-output-states-covering-new "+maxLoopTimesStr+maxLoopForkTimesStr+linkLibStr+IgnorePrintfStr+maxTimeStr+maxMemoryStr+"${sourceFile%.c}.bc\n"
                                                                                                                                                                   "done\n";
         int returnCode = system(shellScriptStr.c_str());
         if (returnCode==-1) llvm::errs() << "Run Klee ERROR!\n";
@@ -2660,7 +2677,7 @@ int main(int argc, const char **argv) {
                                                                            #if CLANG_VERSION == 3
                                                                            "-allow-external-sym-calls -no-interpolation"
                                                                            #endif
-                                                                           "-dump-states-on-halt=0 "+IgnorePrintfStr+maxTimeStr+maxMemoryStr+"${sourceFile%.c}.bc\n"
+                                                                           "-dump-states-on-halt=0 "+maxLoopTimesStr+maxLoopForkTimesStr+linkLibStr+IgnorePrintfStr+maxTimeStr+maxMemoryStr+"${sourceFile%.c}.bc\n"
                                                                                                                                 "done\n";
         int returnCode = system(shellScriptStr.c_str());
         if (returnCode==-1) llvm::errs() << "Run Klee ERROR!\n";
